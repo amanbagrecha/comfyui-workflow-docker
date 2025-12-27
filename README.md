@@ -77,23 +77,24 @@ docker pull amanbagrecha/container-comfyui:latest
 
 ### Step 2: Download Required Models
 
-Models are not included in the Docker image due to their size (~33GB total).
+Models are not included in the Docker image due to their size. Use the provided script to download all required models automatically:
 
-**SAM3 Model:**
 ```bash
-mkdir -p models/comfyui/sam3
-# Download from: https://huggingface.co/facebook/sam2-hiera-large/tree/main
-# Place sam3.pt in models/comfyui/sam3/
+# Run the model download script
+./download-models.sh
 ```
 
-**EgoBlur Models:**
-```bash
-mkdir -p models/egoblur_gen2
-# Download from: https://github.com/facebookresearch/EgoBlur/releases
-# Download both files:
-# - ego_blur_face_gen2.jit (~400MB)
-# - ego_blur_lp_gen2.jit (~400MB)
-```
+The script will download:
+- **Text Encoder**: Qwen 2.5 VL 7B (FP8)
+- **VAE**: Qwen Image VAE
+- **LoRA**: Qwen Image Edit Lightning (4-step)
+- **Upscaler**: Real-ESRGAN x2
+- **Diffusion Model**: Qwen Image Edit 2509 (FP8)
+- **SAM3**: Segment Anything Model 3 (from [public mirror](https://huggingface.co/aravgarg588/comfyui-container-model))
+- **EgoBlur Face**: Face detection model (from [public mirror](https://huggingface.co/aravgarg588/comfyui-container-model))
+- **EgoBlur License Plate**: License plate detection model (from [public mirror](https://huggingface.co/aravgarg588/comfyui-container-model))
+
+**Note:** The script automatically skips models that already exist, so you can safely re-run it. No HuggingFace token required!
 
 ### Step 3: Create Required Directories
 
@@ -123,6 +124,7 @@ Before building, ensure you have the following files and directories:
 container/
 ├── Dockerfile                    # Main Dockerfile
 ├── docker-compose.yml           # Docker Compose configuration
+├── download-models.sh           # Automated model download script
 ├── Comfy-Lock.yaml              # ComfyUI snapshot for reproducible builds
 ├── workflow-updated.json        # ComfyUI workflow definition
 ├── .dockerignore                # Files to exclude from build

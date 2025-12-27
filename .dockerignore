@@ -1,0 +1,45 @@
+# Existing installation
+.venv/
+ComfyUI/
+# inpainting-workflow-master/ - Now included in production image
+
+# Build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist/
+build/
+
+# Logs
+nohup.out
+*.log
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Outputs and models (mounted as volumes)
+output/
+output-postprocessed/
+output-egoblur/
+input/
+models/
+
+# Docker files (don't need in context)
+docker-compose.yml
+README.md

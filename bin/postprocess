@@ -1,0 +1,2 @@
+#!/bin/bash
+docker exec -it comfyui-container python /workspace/inpainting/postprocess.py "$@"

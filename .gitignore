@@ -1,0 +1,53 @@
+# Python Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+
+# Model Files (too large for git - download separately)
+models/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.jit
+
+# Input/Output Directories (user data and generated files)
+input/
+output/
+output-*/
+comfy_outputs/
+
+# Runtime and Log Files
+nohup.out
+*.log
+logs/
+
+# Claude Code Internal
+.claude/
+
+# OS Files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE Files
+.vscode/
+.idea/
+*.iml
+
+# Cache and Temporary Files
+.cache/
+*.tmp
+tmp/
+temp/
+
+# Docker volumes (if any)
+volumes/

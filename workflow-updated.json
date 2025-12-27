@@ -1,0 +1,735 @@
+{
+  "335": {
+    "inputs": {
+      "strength": 1,
+      "model": [
+        "339",
+        0
+      ]
+    },
+    "class_type": "CFGNorm",
+    "_meta": {
+      "title": "CFGNorm"
+    }
+  },
+  "336": {
+    "inputs": {
+      "samples": [
+        "340",
+        0
+      ],
+      "vae": [
+        "337",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "337": {
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "338": {
+    "inputs": {
+      "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "339": {
+    "inputs": {
+      "shift": 3,
+      "model": [
+        "354",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingAuraFlow",
+    "_meta": {
+      "title": "ModelSamplingAuraFlow"
+    }
+  },
+  "340": {
+    "inputs": {
+      "seed": 990959865347854,
+      "steps": 4,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "karras",
+      "denoise": 1,
+      "model": [
+        "335",
+        0
+      ],
+      "positive": [
+        "395",
+        0
+      ],
+      "negative": [
+        "347",
+        0
+      ],
+      "latent_image": [
+        "375",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "341": {
+    "inputs": {
+      "unet_name": "qwen_image_edit_2509_fp8_e4m3fn.safetensors",
+      "weight_dtype": "fp8_e4m3fn"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "347": {
+    "inputs": {
+      "prompt": "ghost people, vehicle, zoom, offset, clouds, glare",
+      "target_size": 896,
+      "clip": [
+        "338",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "_meta": {
+      "title": "TextEncodeQwenImageEditPlus"
+    }
+  },
+  "348": {
+    "inputs": {
+      "prompt": "replace the sky with clear sunny beautiful realistic sky. Important: This is an equirectangular 360° panoramic image. Ensure the sky is seamless across the left and right edges (i.e., the sky must tile perfectly horizontally to avoid visible seams in a 360° viewer). Match the sun position and lighting direction to maintain realistic illumination on the scene. Preserve everything outside it exactly. keep rest of the features intact",
+      "target_size": 896,
+      "clip": [
+        "338",
+        0
+      ],
+      "image1": [
+        "397",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "_meta": {
+      "title": "TextEncodeQwenImageEditPlus"
+    }
+  },
+  "349": {
+    "inputs": {
+      "image": "1000115107555_1435204462014_ladybug_panoramic_000146.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "354": {
+    "inputs": {
+      "lora_name": "Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors",
+      "strength_model": 1,
+      "model": [
+        "341",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "LoraLoaderModelOnly"
+    }
+  },
+  "375": {
+    "inputs": {
+      "pixels": [
+        "397",
+        0
+      ],
+      "vae": [
+        "337",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode"
+    }
+  },
+  "395": {
+    "inputs": {
+      "conditioning": [
+        "348",
+        0
+      ],
+      "latent": [
+        "375",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "ReferenceLatent"
+    }
+  },
+  "397": {
+    "inputs": {
+      "image": [
+        "443",
+        0
+      ]
+    },
+    "class_type": "FluxKontextImageScale",
+    "_meta": {
+      "title": "FluxKontextImageScale"
+    }
+  },
+  "439": {
+    "inputs": {
+      "width": 1024,
+      "height": 512,
+      "x": 0,
+      "y": 256,
+      "image": [
+        "336",
+        0
+      ]
+    },
+    "class_type": "ImageCrop",
+    "_meta": {
+      "title": "Image Crop"
+    }
+  },
+  "442": {
+    "inputs": {
+      "fov_deg_h": 140,
+      "fov_deg_v": 140,
+      "h_deg": 180,
+      "v_deg": 290,
+      "out_h": 1024,
+      "out_w": 1024,
+      "in_rot_deg": 0,
+      "padding_mode": "bilinear",
+      "e_img": [
+        "349",
+        0
+      ]
+    },
+    "class_type": "Equirectangular to Perspective",
+    "_meta": {
+      "title": "Equirectangular to Perspective"
+    }
+  },
+  "443": {
+    "inputs": {
+      "target_width": 1024,
+      "target_height": 1024,
+      "padding_color": "black",
+      "interpolation": "area",
+      "image": [
+        "349",
+        0
+      ]
+    },
+    "class_type": "ResizeAndPadImage",
+    "_meta": {
+      "title": "ResizeAndPadImage"
+    }
+  },
+  "445": {
+    "inputs": {
+      "model_path": "models/sam3/sam3.pt",
+      "hf_token": "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"
+    },
+    "class_type": "LoadSAM3Model",
+    "_meta": {
+      "title": "(down)Load SAM3 Model"
+    }
+  },
+  "447": {
+    "inputs": {
+      "confidence_threshold": 0.3,
+      "text_prompt": "glare",
+      "max_detections": -1,
+      "offload_model": false,
+      "sam3_model": [
+        "445",
+        0
+      ],
+      "image": [
+        "585",
+        0
+      ]
+    },
+    "class_type": "SAM3Grounding",
+    "_meta": {
+      "title": "SAM3 Text Segmentation"
+    }
+  },
+  "448": {
+    "inputs": {
+      "confidence_threshold": 0.3,
+      "text_prompt": "sky",
+      "max_detections": -1,
+      "offload_model": false,
+      "sam3_model": [
+        "445",
+        0
+      ],
+      "image": [
+        "585",
+        0
+      ]
+    },
+    "class_type": "SAM3Grounding",
+    "_meta": {
+      "title": "SAM3 Text Segmentation"
+    }
+  },
+  "450": {
+    "inputs": {
+      "masks": [
+        "447",
+        0
+      ]
+    },
+    "class_type": "Masks Combine Batch",
+    "_meta": {
+      "title": "Masks Combine Batch"
+    }
+  },
+  "454": {
+    "inputs": {
+      "prompt": "remove the masked car at the center of the image and fill with road surface that matches the surrounding. Preserve everything outside it exactly. road color and texture should match adjacent area. keep rest of the features intact. ",
+      "target_size": 896,
+      "clip": [
+        "338",
+        0
+      ],
+      "image1": [
+        "464",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "_meta": {
+      "title": "TextEncodeQwenImageEditPlus"
+    }
+  },
+  "455": {
+    "inputs": {
+      "pixels": [
+        "464",
+        0
+      ],
+      "vae": [
+        "337",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode"
+    }
+  },
+  "456": {
+    "inputs": {
+      "prompt": "ghost people, vehicle, zoom, offset, glare",
+      "target_size": 896,
+      "clip": [
+        "338",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "_meta": {
+      "title": "TextEncodeQwenImageEditPlus"
+    }
+  },
+  "457": {
+    "inputs": {
+      "shift": 3,
+      "model": [
+        "354",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingAuraFlow",
+    "_meta": {
+      "title": "ModelSamplingAuraFlow"
+    }
+  },
+  "458": {
+    "inputs": {
+      "strength": 1,
+      "model": [
+        "457",
+        0
+      ]
+    },
+    "class_type": "CFGNorm",
+    "_meta": {
+      "title": "CFGNorm"
+    }
+  },
+  "459": {
+    "inputs": {
+      "conditioning": [
+        "454",
+        0
+      ],
+      "latent": [
+        "455",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "ReferenceLatent"
+    }
+  },
+  "460": {
+    "inputs": {
+      "seed": 358043935945495,
+      "steps": 4,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "karras",
+      "denoise": 1,
+      "model": [
+        "458",
+        0
+      ],
+      "positive": [
+        "459",
+        0
+      ],
+      "negative": [
+        "456",
+        0
+      ],
+      "latent_image": [
+        "455",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "461": {
+    "inputs": {
+      "samples": [
+        "460",
+        0
+      ],
+      "vae": [
+        "337",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "463": {
+    "inputs": {
+      "image": "perspective_mask.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "464": {
+    "inputs": {
+      "x": 0,
+      "y": 0,
+      "resize_source": false,
+      "destination": [
+        "442",
+        0
+      ],
+      "source": [
+        "466",
+        0
+      ],
+      "mask": [
+        "467",
+        0
+      ]
+    },
+    "class_type": "ImageCompositeMasked",
+    "_meta": {
+      "title": "ImageCompositeMasked"
+    }
+  },
+  "466": {
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1,
+      "color": 0
+    },
+    "class_type": "EmptyImage",
+    "_meta": {
+      "title": "EmptyImage"
+    }
+  },
+  "467": {
+    "inputs": {
+      "channel": "red",
+      "image": [
+        "463",
+        0
+      ]
+    },
+    "class_type": "ImageToMask",
+    "_meta": {
+      "title": "Convert Image to Mask"
+    }
+  },
+  "470": {
+    "inputs": {
+      "masks": [
+        "448",
+        0
+      ]
+    },
+    "class_type": "Masks Combine Batch",
+    "_meta": {
+      "title": "Masks Combine Batch"
+    }
+  },
+  "472": {
+    "inputs": {
+      "x": 88,
+      "y": 256,
+      "width": 1024,
+      "height": 512,
+      "mask": [
+        "588",
+        0
+      ]
+    },
+    "class_type": "CropMask",
+    "_meta": {
+      "title": "CropMask"
+    }
+  },
+  "475": {
+    "inputs": {
+      "amount": 10,
+      "device": "auto",
+      "mask": [
+        "594",
+        0
+      ]
+    },
+    "class_type": "MaskBlur+",
+    "_meta": {
+      "title": "🔧 Mask Blur"
+    }
+  },
+  "480": {
+    "inputs": {
+      "width": 8000,
+      "height": 4000,
+      "interpolation": "bilinear",
+      "method": "stretch",
+      "condition": "always",
+      "multiple_of": 0,
+      "image": [
+        "551",
+        0
+      ]
+    },
+    "class_type": "ImageResize+",
+    "_meta": {
+      "title": "🔧 Image Resize"
+    }
+  },
+  "483": {
+    "inputs": {
+      "mask": [
+        "475",
+        0
+      ]
+    },
+    "class_type": "InvertMask",
+    "_meta": {
+      "title": "InvertMask"
+    }
+  },
+  "484": {
+    "inputs": {
+      "x": 0,
+      "y": 0,
+      "resize_source": false,
+      "destination": [
+        "480",
+        0
+      ],
+      "source": [
+        "598",
+        0
+      ],
+      "mask": [
+        "483",
+        0
+      ]
+    },
+    "class_type": "ImageCompositeMasked",
+    "_meta": {
+      "title": "ImageCompositeMasked"
+    }
+  },
+  "551": {
+    "inputs": {
+      "upscale_model": [
+        "552",
+        0
+      ],
+      "image": [
+        "439",
+        0
+      ]
+    },
+    "class_type": "ImageUpscaleWithModel",
+    "_meta": {
+      "title": "Upscale Image (using Model)"
+    }
+  },
+  "552": {
+    "inputs": {
+      "model_name": "RealESRGAN_x2plus.pth"
+    },
+    "class_type": "UpscaleModelLoader",
+    "_meta": {
+      "title": "Load Upscale Model"
+    }
+  },
+  "582": {
+    "inputs": {
+      "masks": [
+        "472",
+        0
+      ]
+    },
+    "class_type": "Mask Fill Holes",
+    "_meta": {
+      "title": "Mask Fill Holes"
+    }
+  },
+  "585": {
+    "inputs": {
+      "target_width": 1200,
+      "target_height": 1024,
+      "padding_color": "black",
+      "interpolation": "area",
+      "image": [
+        "443",
+        0
+      ]
+    },
+    "class_type": "ResizeAndPadImage",
+    "_meta": {
+      "title": "ResizeAndPadImage"
+    }
+  },
+  "588": {
+    "inputs": {
+      "mask_a": [
+        "450",
+        0
+      ],
+      "mask_b": [
+        "470",
+        0
+      ]
+    },
+    "class_type": "Masks Combine Regions",
+    "_meta": {
+      "title": "Masks Combine Regions"
+    }
+  },
+  "594": {
+    "inputs": {
+      "iterations": 3,
+      "masks": [
+        "582",
+        0
+      ]
+    },
+    "class_type": "Mask Dilate Region",
+    "_meta": {
+      "title": "Mask Dilate Region"
+    }
+  },
+  "598": {
+    "inputs": {
+      "fov_w": 140,
+      "fov_h": 140,
+      "u_deg": 180,
+      "v_deg": -70,
+      "feather": 9,
+      "perspective": [
+        "461",
+        0
+      ],
+      "equi_base": [
+        "349",
+        0
+      ]
+    },
+    "class_type": "P2E And Blend",
+    "_meta": {
+      "title": "Perspective to Equirectangular + Blend"
+    }
+  },
+  "599": {
+    "inputs": {
+      "output_path": "[time(%Y-%m-%d)]",
+      "filename_prefix": "ComfyUI",
+      "filename_delimiter": "_",
+      "filename_number_padding": 4,
+      "filename_number_start": "false",
+      "extension": "jpg",
+      "dpi": 300,
+      "quality": 95,
+      "optimize_image": "true",
+      "lossless_webp": "false",
+      "overwrite_mode": "false",
+      "show_history": "false",
+      "show_history_by_prefix": "false",
+      "embed_workflow": "true",
+      "show_previews": "false",
+      "images": [
+        "484",
+        0
+      ]
+    },
+    "class_type": "Image Save",
+    "_meta": {
+      "title": "Image Save"
+    }
+  }
+}

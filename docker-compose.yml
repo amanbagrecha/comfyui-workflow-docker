@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  comfyui:
+    build: .
+    container_name: comfyui-container
+    ports:
+      - "8188:8188"
+    volumes:
+      # Models directory with subfolders
+      - ./models/comfyui:/workspace/ComfyUI/models
+      - ./models/egoblur_gen2:/workspace/inpainting/models/egoblur_gen2
+      # Input/Output for ComfyUI and inpainting pipeline
+      - ./input:/workspace/ComfyUI/input
+      - ./output:/workspace/ComfyUI/output
+      - ./output-postprocessed:/workspace/output-postprocessed
+      - ./output-egoblur:/workspace/output-egoblur
+      # Workflow file
+      - ./workflow-updated.json:/workspace/workflow.json:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    restart: unless-stopped
+    shm_size: '8gb'

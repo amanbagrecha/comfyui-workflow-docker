@@ -63,37 +63,37 @@ echo ""
 # 1. Text Encoder Model (~7B parameters, FP8)
 download_model \
     "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors" \
-    "models/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors" \
+    "models/comfyui/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors" \
     "[1/9] Qwen 2.5 VL Text Encoder (FP8)"
 
 # 2. VAE Model
 download_model \
     "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors" \
-    "models/vae/qwen_image_vae.safetensors" \
+    "models/comfyui/vae/qwen_image_vae.safetensors" \
     "[2/9] Qwen Image VAE"
 
 # 3. LoRA Model (Lightning 4-step)
 download_model \
     "https://huggingface.co/lightx2v/Qwen-Image-Lightning/resolve/main/Qwen-Image-Edit-2509/Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors" \
-    "models/loras/Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors" \
+    "models/comfyui/loras/Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors" \
     "[3/9] Qwen Image Edit Lightning LoRA"
 
 # 4. Upscale Model (Real-ESRGAN x2)
 download_model \
     "https://huggingface.co/ai-forever/Real-ESRGAN/resolve/a86fc6182b4650b4459cb1ddcb0a0d1ec86bf3b0/RealESRGAN_x2.pth" \
-    "models/upscale_models/RealESRGAN_x2.pth" \
+    "models/comfyui/upscale_models/RealESRGAN_x2.pth" \
     "[4/9] Real-ESRGAN x2 Upscaler"
 
 # 5. Diffusion Model (Qwen Image Edit FP8)
 download_model \
     "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors" \
-    "models/diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors" \
+    "models/comfyui/diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors" \
     "[5/9] Qwen Image Edit Diffusion Model (FP8)"
 
 # 6. SAM3 Model (Segment Anything Model 3)
 download_model \
     "https://huggingface.co/aravgarg588/comfyui-container-model/resolve/main/sam3/sam3.pt" \
-    "models/sam3/sam3.pt" \
+    "models/comfyui/sam3/sam3.pt" \
     "[6/9] SAM3 Segmentation Model"
 
 # 7. EgoBlur Face Detection Model
@@ -121,12 +121,13 @@ echo "======================================"
 echo ""
 echo "Downloaded models structure:"
 echo "  models/"
-echo "  ├── text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"
-echo "  ├── vae/qwen_image_vae.safetensors"
-echo "  ├── loras/Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors"
-echo "  ├── upscale_models/RealESRGAN_x2.pth"
-echo "  ├── diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors"
-echo "  ├── sam3/sam3.pt"
+echo "  ├── comfyui/"
+echo "  │   ├── text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"
+echo "  │   ├── vae/qwen_image_vae.safetensors"
+echo "  │   ├── loras/Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors"
+echo "  │   ├── upscale_models/RealESRGAN_x2.pth"
+echo "  │   ├── diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors"
+echo "  │   └── sam3/sam3.pt"
 echo "  └── egoblur_gen2/"
 echo "      ├── ego_blur_face_gen2.jit"
 echo "      └── ego_blur_lp_gen2.jit"

@@ -65,6 +65,56 @@ docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 nvidia-smi
 
 ---
 
+## Quick Start with Pre-built Image
+
+The easiest way to get started is using the pre-built Docker image from Docker Hub:
+
+### Step 1: Pull the Pre-built Image
+
+```bash
+docker pull amanbagrecha/container-comfyui:latest
+```
+
+### Step 2: Download Required Models
+
+Models are not included in the Docker image due to their size (~33GB total).
+
+**SAM3 Model:**
+```bash
+mkdir -p models/comfyui/sam3
+# Download from: https://huggingface.co/facebook/sam2-hiera-large/tree/main
+# Place sam3.pt in models/comfyui/sam3/
+```
+
+**EgoBlur Models:**
+```bash
+mkdir -p models/egoblur_gen2
+# Download from: https://github.com/facebookresearch/EgoBlur/releases
+# Download both files:
+# - ego_blur_face_gen2.jit (~400MB)
+# - ego_blur_lp_gen2.jit (~400MB)
+```
+
+### Step 3: Create Required Directories
+
+```bash
+mkdir -p input output output-postprocessed output-egoblur
+```
+
+### Step 4: Start the Container
+
+```bash
+docker compose up -d
+```
+
+**ComfyUI will be accessible at:** http://localhost:8188
+
+---
+
+## Building from Source
+
+If you prefer to build the Docker image yourself, follow these instructions:
+
 ## Required Files & Directory Structure
 
 Before building, ensure you have the following files and directories:
@@ -105,26 +155,9 @@ container/
 └── output-egoblur/             # Final outputs with blurring
 ```
 
-### Download Required Models
-
-**SAM3 Model:**
-```bash
-mkdir -p models/comfyui/sam3
-# Download from: https://huggingface.co/facebook/sam2-hiera-large/tree/main
-# Place sam3.pt in models/comfyui/sam3/
-```
-
-**EgoBlur Models:**
-```bash
-mkdir -p models/egoblur_gen2
-# Download from: https://github.com/facebookresearch/EgoBlur/releases
-# - ego_blur_face_gen2.jit
-# - ego_blur_lp_gen2.jit
-```
-
 ---
 
-## Setup Instructions
+## Build Instructions (From Source)
 
 ### Step 1: Clone/Copy Project Files
 

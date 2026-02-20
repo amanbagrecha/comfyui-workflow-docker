@@ -689,7 +689,7 @@
       "fov_w": 140,
       "fov_h": 140,
       "u_deg": 180,
-      "v_deg": -70,
+      "v_deg": -69.5,
       "feather": 9,
       "perspective": [
         "461",
@@ -707,8 +707,8 @@
   },
   "599": {
     "inputs": {
-      "output_path": "[time(%Y-%m-%d)]",
-      "filename_prefix": "ComfyUI",
+      "output_path": "batch-all",
+      "filename_prefix": "input_image",
       "filename_delimiter": "_",
       "filename_number_padding": 4,
       "filename_number_start": "false",
@@ -717,7 +717,7 @@
       "quality": 95,
       "optimize_image": "true",
       "lossless_webp": "false",
-      "overwrite_mode": "false",
+      "overwrite_mode": "prefix_as_filename",
       "show_history": "false",
       "show_history_by_prefix": "false",
       "embed_workflow": "true",

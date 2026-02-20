@@ -84,6 +84,12 @@ download_model \
     "models/comfyui/upscale_models/RealESRGAN_x2.pth" \
     "[4/9] Real-ESRGAN x2 Upscaler"
 
+# 4b. Upscale Model required by workflow-updated.json
+download_model \
+    "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth" \
+    "models/comfyui/upscale_models/RealESRGAN_x2plus.pth" \
+    "[4b/9] Real-ESRGAN x2plus Upscaler"
+
 # 5. Diffusion Model (Qwen Image Edit FP8)
 download_model \
     "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors" \
@@ -126,6 +132,7 @@ echo "  │   ├── text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"
 echo "  │   ├── vae/qwen_image_vae.safetensors"
 echo "  │   ├── loras/Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors"
 echo "  │   ├── upscale_models/RealESRGAN_x2.pth"
+echo "  │   ├── upscale_models/RealESRGAN_x2plus.pth"
 echo "  │   ├── diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors"
 echo "  │   └── sam3/sam3.pt"
 echo "  └── egoblur_gen2/"

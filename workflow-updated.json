@@ -684,15 +684,33 @@
       "title": "Mask Dilate Region"
     }
   },
+  "700": {
+    "inputs": {
+      "width": 1536,
+      "height": 1536,
+      "interpolation": "bicubic",
+      "method": "stretch",
+      "condition": "always",
+      "multiple_of": 0,
+      "image": [
+        "461",
+        0
+      ]
+    },
+    "class_type": "ImageResize+",
+    "_meta": {
+      "title": "ImageResize+"
+    }
+  },
   "598": {
     "inputs": {
       "fov_w": 140,
       "fov_h": 140,
       "u_deg": 180,
-      "v_deg": -69.5,
+      "v_deg": -70,
       "feather": 9,
       "perspective": [
-        "461",
+        "700",
         0
       ],
       "equi_base": [

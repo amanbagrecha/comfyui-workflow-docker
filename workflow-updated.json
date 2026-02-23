@@ -718,7 +718,7 @@
         0
       ]
     },
-    "class_type": "P2E And Blend",
+    "class_type": "Perspective to Equirectangular",
     "_meta": {
       "title": "Perspective to Equirectangular + Blend"
     }

@@ -225,6 +225,7 @@ def main(
         )
 
     # Run in parallel
+    failures = []
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(_run_one, p): p for p in images}
         for fut in as_completed(futs):
@@ -232,7 +233,14 @@ def main(
             try:
                 click.echo(fut.result())
             except Exception as e:
-                click.echo(f"FAIL {p.name}: {e}", err=True)
+                message = f"FAIL {p.name}: {e}"
+                click.echo(message, err=True)
+                failures.append(message)
+
+    if failures:
+        raise click.ClickException(
+            f"{len(failures)} of {len(images)} image(s) failed in ComfyUI stage"
+        )
 
 
 if __name__ == "__main__":

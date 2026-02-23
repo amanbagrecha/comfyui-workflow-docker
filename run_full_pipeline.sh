@@ -14,6 +14,8 @@ AUTO_DOWNLOAD_MODELS="${AUTO_DOWNLOAD_MODELS:-1}"
 MODELS_ROOT="${MODELS_ROOT:-$REPO/models}"
 MODELS_COMFYUI_DIR="${MODELS_COMFYUI_DIR:-$MODELS_ROOT/comfyui}"
 MODELS_EGOBLUR_DIR="${MODELS_EGOBLUR_DIR:-$MODELS_ROOT/egoblur_gen2}"
+COMFY_READY_TIMEOUT="${COMFY_READY_TIMEOUT:-300}"
+COMFY_READY_POLL="${COMFY_READY_POLL:-2}"
 RUN_ID="$(date +%Y%m%d_%H%M%S)"
 
 LOG_DIR="$REPO/logs"
@@ -36,6 +38,7 @@ echo "POSTPROCESS_WORKERS=$POSTPROCESS_WORKERS"
 echo "EGOBLUR_WORKERS=$EGOBLUR_WORKERS"
 echo "MODELS_COMFYUI_DIR=$MODELS_COMFYUI_DIR"
 echo "MODELS_EGOBLUR_DIR=$MODELS_EGOBLUR_DIR"
+echo "COMFY_READY_TIMEOUT=$COMFY_READY_TIMEOUT"
 if [ -n "$FINAL_OUTPUT_DIR" ]; then
   echo "FINAL_OUTPUT_DIR=$FINAL_OUTPUT_DIR"
 fi
@@ -87,6 +90,37 @@ MODELS_COMFYUI_DIR="$MODELS_COMFYUI_DIR" \
 MODELS_EGOBLUR_DIR="$MODELS_EGOBLUR_DIR" \
 docker compose up -d
 
+echo "Waiting for ComfyUI API readiness inside container"
+docker exec -i \
+  -e COMFY_READY_TIMEOUT="$COMFY_READY_TIMEOUT" \
+  -e COMFY_READY_POLL="$COMFY_READY_POLL" \
+  "$CONTAINER_NAME" \
+  python - <<'PY'
+import os
+import sys
+import time
+import urllib.request
+
+timeout = int(os.environ["COMFY_READY_TIMEOUT"])
+poll = float(os.environ["COMFY_READY_POLL"])
+url = "http://127.0.0.1:8188/system_stats"
+deadline = time.time() + timeout
+last_error = None
+
+while time.time() < deadline:
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            if response.status == 200:
+                print("ComfyUI API ready")
+                sys.exit(0)
+    except Exception as exc:  # pragma: no cover - runtime readiness polling
+        last_error = exc
+    time.sleep(poll)
+
+print(f"ERROR: ComfyUI API not ready within {timeout}s. Last error: {last_error}")
+sys.exit(1)
+PY
+
 DST="$REPO/input/$BATCH_NAME"
 OUT1="$REPO/output/$BATCH_NAME"
 OUT2="$REPO/output-postprocessed/$BATCH_NAME"
@@ -137,6 +171,23 @@ docker exec "$CONTAINER_NAME" python /workspace/inpainting/comfyui_run.py \
 E_INP=$(date +%s)
 INPAINT_SEC=$((E_INP - S_INP))
 echo "=== STAGE_END inpainting elapsed_sec=$INPAINT_SEC ==="
+
+export OUT1
+INPAINT_COUNT=$(python3 - <<'PY'
+import os
+from pathlib import Path
+
+exts = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
+root = Path(os.environ["OUT1"])
+count = sum(1 for p in root.rglob("*") if p.is_file() and p.suffix.lower() in exts)
+print(count)
+PY
+)
+echo "inpainting_output_count=$INPAINT_COUNT"
+if [ "$INPAINT_COUNT" -eq 0 ]; then
+  echo "ERROR: No inpainting outputs found in $OUT1; aborting downstream stages."
+  exit 1
+fi
 
 S_POST=$(date +%s)
 echo "=== STAGE_START postprocess ==="

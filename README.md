@@ -107,6 +107,16 @@ BATCH_NAME="batch-$(date +%Y%m%d_%H%M%S)" \
 ./run_full_pipeline.sh
 ```
 
+For shared models across multiple repo copies or machines mounted on shared storage:
+
+```bash
+SRC="/absolute/path/to/your/input_images" \
+FINAL_OUTPUT_DIR="/absolute/path/to/your/final_outputs" \
+MODELS_ROOT="/absolute/path/to/shared-model-cache" \
+BATCH_NAME="batch-$(date +%Y%m%d_%H%M%S)" \
+./run_full_pipeline.sh
+```
+
 Notes:
 - `SRC` is your image folder.
 - Final egoblur outputs are copied to `FINAL_OUTPUT_DIR/<batch-name>/`.

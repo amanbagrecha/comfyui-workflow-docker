@@ -11,6 +11,9 @@ EGOBLUR_WORKERS="${EGOBLUR_WORKERS:-3}"
 CONTAINER_NAME="${CONTAINER_NAME:-comfyui-container}"
 FINAL_OUTPUT_DIR="${FINAL_OUTPUT_DIR:-}"
 AUTO_DOWNLOAD_MODELS="${AUTO_DOWNLOAD_MODELS:-1}"
+MODELS_ROOT="${MODELS_ROOT:-$REPO/models}"
+MODELS_COMFYUI_DIR="${MODELS_COMFYUI_DIR:-$MODELS_ROOT/comfyui}"
+MODELS_EGOBLUR_DIR="${MODELS_EGOBLUR_DIR:-$MODELS_ROOT/egoblur_gen2}"
 RUN_ID="$(date +%Y%m%d_%H%M%S)"
 
 LOG_DIR="$REPO/logs"
@@ -31,6 +34,8 @@ echo "BATCH_NAME=$BATCH_NAME"
 echo "CONTAINER_NAME=$CONTAINER_NAME"
 echo "POSTPROCESS_WORKERS=$POSTPROCESS_WORKERS"
 echo "EGOBLUR_WORKERS=$EGOBLUR_WORKERS"
+echo "MODELS_COMFYUI_DIR=$MODELS_COMFYUI_DIR"
+echo "MODELS_EGOBLUR_DIR=$MODELS_EGOBLUR_DIR"
 if [ -n "$FINAL_OUTPUT_DIR" ]; then
   echo "FINAL_OUTPUT_DIR=$FINAL_OUTPUT_DIR"
 fi
@@ -40,17 +45,17 @@ mkdir -p \
   "$REPO/output" \
   "$REPO/output-postprocessed" \
   "$REPO/output-egoblur" \
-  "$REPO/models/comfyui" \
-  "$REPO/models/egoblur_gen2" \
+  "$MODELS_COMFYUI_DIR" \
+  "$MODELS_EGOBLUR_DIR" \
   "$REPO/inpainting-workflow-master/models/egoblur_gen2"
 
 required_files=(
-  "$REPO/models/comfyui/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"
-  "$REPO/models/comfyui/vae/qwen_image_vae.safetensors"
-  "$REPO/models/comfyui/diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors"
-  "$REPO/models/comfyui/sam3/sam3.pt"
-  "$REPO/models/egoblur_gen2/ego_blur_face_gen2.jit"
-  "$REPO/models/egoblur_gen2/ego_blur_lp_gen2.jit"
+  "$MODELS_COMFYUI_DIR/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"
+  "$MODELS_COMFYUI_DIR/vae/qwen_image_vae.safetensors"
+  "$MODELS_COMFYUI_DIR/diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors"
+  "$MODELS_COMFYUI_DIR/sam3/sam3.pt"
+  "$MODELS_EGOBLUR_DIR/ego_blur_face_gen2.jit"
+  "$MODELS_EGOBLUR_DIR/ego_blur_lp_gen2.jit"
 )
 
 need_download=0
@@ -64,7 +69,7 @@ done
 if [ "$need_download" = "1" ]; then
   if [ "$AUTO_DOWNLOAD_MODELS" = "1" ]; then
     echo "Required models missing. Running download-models.sh ..."
-    bash "$REPO/download-models.sh"
+    MODELS_ROOT="$MODELS_ROOT" bash "$REPO/download-models.sh"
   else
     echo "ERROR: Required models are missing and AUTO_DOWNLOAD_MODELS=0"
     exit 1
@@ -76,17 +81,11 @@ if [ ! -f "$REPO/input/perspective_mask.png" ]; then
   echo "Copied perspective mask to $REPO/input/perspective_mask.png"
 fi
 
-if docker ps --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
-  echo "Container '$CONTAINER_NAME' already running"
-else
-  if docker ps -a --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
-    echo "Starting existing container '$CONTAINER_NAME'"
-    docker start "$CONTAINER_NAME"
-  else
-    echo "Starting container via docker compose"
-    CONTAINER_NAME="$CONTAINER_NAME" docker compose up -d
-  fi
-fi
+echo "Ensuring container is up via docker compose"
+CONTAINER_NAME="$CONTAINER_NAME" \
+MODELS_COMFYUI_DIR="$MODELS_COMFYUI_DIR" \
+MODELS_EGOBLUR_DIR="$MODELS_EGOBLUR_DIR" \
+docker compose up -d
 
 DST="$REPO/input/$BATCH_NAME"
 OUT1="$REPO/output/$BATCH_NAME"

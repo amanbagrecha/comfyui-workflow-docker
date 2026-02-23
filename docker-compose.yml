@@ -7,10 +7,10 @@ services:
       - "${COMFY_PORT:-8188}:8188"
     volumes:
       # Models directory with subfolders
-      - ./models/comfyui:/workspace/ComfyUI/models
+      - ${MODELS_COMFYUI_DIR:-./models/comfyui}:/workspace/ComfyUI/models
       # Pipeline scripts mounted from host (no rebuild needed for code tweaks)
       - ./inpainting-workflow-master:/workspace/inpainting
-      - ./models/egoblur_gen2:/workspace/inpainting/models/egoblur_gen2:ro
+      - ${MODELS_EGOBLUR_DIR:-./models/egoblur_gen2}:/workspace/inpainting/models/egoblur_gen2:ro
       # Input/Output for ComfyUI and inpainting pipeline
       - ./input:/workspace/ComfyUI/input
       - ./output:/workspace/ComfyUI/output

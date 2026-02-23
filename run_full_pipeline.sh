@@ -4,6 +4,8 @@ set -euo pipefail
 REPO="${REPO:-/data/comfyui-workflow-docker/repo}"
 SRC="${SRC:-/data/comfyui-workflow-docker/pano_data}"
 BATCH_NAME="${BATCH_NAME:-batch-all}"
+POSTPROCESS_WORKERS="${POSTPROCESS_WORKERS:-1}"
+EGOBLUR_WORKERS="${EGOBLUR_WORKERS:-3}"
 RUN_ID="$(date +%Y%m%d_%H%M%S)"
 
 LOG_DIR="$REPO/logs"
@@ -18,6 +20,8 @@ START_EPOCH=$(date +%s)
 echo "RUN_ID=$RUN_ID"
 echo "LOG_FILE=$LOG_FILE"
 echo "SUMMARY_FILE=$SUMMARY_FILE"
+echo "POSTPROCESS_WORKERS=$POSTPROCESS_WORKERS"
+echo "EGOBLUR_WORKERS=$EGOBLUR_WORKERS"
 
 DST="$REPO/input/$BATCH_NAME"
 OUT1="$REPO/output/$BATCH_NAME"
@@ -69,7 +73,7 @@ docker exec comfyui-container python /workspace/inpainting/postprocess.py \
   -o /workspace/output-postprocessed/$BATCH_NAME \
   --top-mask /workspace/inpainting/sky_mask_updated.png \
   --pattern "*.jpg" \
-  -j 1
+  -j "$POSTPROCESS_WORKERS"
 E_POST=$(date +%s)
 POSTPROCESS_SEC=$((E_POST - S_POST))
 echo "=== STAGE_END postprocess elapsed_sec=$POSTPROCESS_SEC ==="
@@ -81,7 +85,7 @@ docker exec comfyui-container python /workspace/inpainting/egoblur_infer.py \
   --output-dir /workspace/output-egoblur/$BATCH_NAME \
   --face-model /workspace/inpainting/models/egoblur_gen2/ego_blur_face_gen2.jit \
   --lp-model /workspace/inpainting/models/egoblur_gen2/ego_blur_lp_gen2.jit \
-  --workers 1
+  --workers "$EGOBLUR_WORKERS"
 E_EGO=$(date +%s)
 EGOBLUR_SEC=$((E_EGO - S_EGO))
 echo "=== STAGE_END egoblur elapsed_sec=$EGOBLUR_SEC ==="

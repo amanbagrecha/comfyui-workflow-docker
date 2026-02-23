@@ -96,19 +96,32 @@ The script will download:
 
 **Note:** The script automatically skips models that already exist, so you can safely re-run it. No HuggingFace token required!
 
-### Step 3: Create Required Directories
+### Step 3: Run Full Pipeline (one command)
+
+`run_full_pipeline.sh` now auto-creates local directories, auto-copies `perspective_mask.png` into `input/`, auto-starts Docker (if needed), and can auto-download models if missing.
 
 ```bash
-mkdir -p input output output-postprocessed output-egoblur
+SRC="/absolute/path/to/your/input_images" \
+FINAL_OUTPUT_DIR="/absolute/path/to/your/final_outputs" \
+BATCH_NAME="batch-$(date +%Y%m%d_%H%M%S)" \
+./run_full_pipeline.sh
 ```
 
-### Step 4: Start the Container
+Notes:
+- `SRC` is your image folder.
+- Final egoblur outputs are copied to `FINAL_OUTPUT_DIR/<batch-name>/`.
+- Intermediate outputs remain in repo folders (`output/`, `output-postprocessed/`, `output-egoblur/`).
+- Defaults: `POSTPROCESS_WORKERS=1`, `EGOBLUR_WORKERS=3`.
+
+Optional overrides:
 
 ```bash
-docker compose up -d
+CONTAINER_NAME="comfyui-container" \
+POSTPROCESS_WORKERS=1 \
+EGOBLUR_WORKERS=3 \
+AUTO_DOWNLOAD_MODELS=1 \
+./run_full_pipeline.sh
 ```
-
-**ComfyUI will be accessible at:** http://localhost:8188
 
 ---
 

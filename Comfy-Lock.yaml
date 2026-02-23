@@ -12,7 +12,7 @@ custom_nodes:
   git_custom_nodes:
     https://github.com/amanbagrecha/p2e:
       disabled: false
-      hash: a257292aa029a141f216d5112b4536234471e5bd
+      hash: b06b31072d13afeb323ecff364a869377c631568
     https://github.com/ltdrdata/ComfyUI-Manager:
       disabled: false
       hash: 2478d20e76aeb2f42a6f372029e417201ef927b3

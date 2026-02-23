@@ -684,6 +684,24 @@
       "title": "Mask Dilate Region"
     }
   },
+  "700": {
+    "inputs": {
+      "width": 1536,
+      "height": 1536,
+      "interpolation": "bicubic",
+      "method": "stretch",
+      "condition": "always",
+      "multiple_of": 0,
+      "image": [
+        "461",
+        0
+      ]
+    },
+    "class_type": "ImageResize+",
+    "_meta": {
+      "title": "ImageResize+"
+    }
+  },
   "598": {
     "inputs": {
       "fov_w": 140,
@@ -692,7 +710,7 @@
       "v_deg": -70,
       "feather": 9,
       "perspective": [
-        "461",
+        "700",
         0
       ],
       "equi_base": [
@@ -700,15 +718,15 @@
         0
       ]
     },
-    "class_type": "P2E And Blend",
+    "class_type": "Perspective to Equirectangular",
     "_meta": {
       "title": "Perspective to Equirectangular + Blend"
     }
   },
   "599": {
     "inputs": {
-      "output_path": "[time(%Y-%m-%d)]",
-      "filename_prefix": "ComfyUI",
+      "output_path": "batch-all",
+      "filename_prefix": "input_image",
       "filename_delimiter": "_",
       "filename_number_padding": 4,
       "filename_number_start": "false",
@@ -717,7 +735,7 @@
       "quality": 95,
       "optimize_image": "true",
       "lossless_webp": "false",
-      "overwrite_mode": "false",
+      "overwrite_mode": "prefix_as_filename",
       "show_history": "false",
       "show_history_by_prefix": "false",
       "embed_workflow": "true",

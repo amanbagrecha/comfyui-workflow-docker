@@ -79,7 +79,10 @@ class EgoBlurGen2:
                 detection_class=ClassID.FACE,
                 score_threshold=face_threshold,
                 nms_iou_threshold=nms_iou_threshold,
-                resize_aug={"min_size_test": RESIZE_MIN_GEN2, "max_size_test": RESIZE_MAX_GEN2},
+                resize_aug={
+                    "min_size_test": RESIZE_MIN_GEN2,
+                    "max_size_test": RESIZE_MAX_GEN2,
+                },
             )
             if face_model_path
             else None
@@ -92,7 +95,10 @@ class EgoBlurGen2:
                 detection_class=ClassID.LICENSE_PLATE,
                 score_threshold=lp_threshold,
                 nms_iou_threshold=nms_iou_threshold,
-                resize_aug={"min_size_test": RESIZE_MIN_GEN2, "max_size_test": RESIZE_MAX_GEN2},
+                resize_aug={
+                    "min_size_test": RESIZE_MIN_GEN2,
+                    "max_size_test": RESIZE_MAX_GEN2,
+                },
             )
             if lp_model_path
             else None
@@ -230,32 +236,67 @@ def _process_one(args: Tuple[str, str]) -> Tuple[str, bool, str]:
             "boxes_xyxy": boxes,
             "seconds": dt,
         }
-        with open(p_out.with_suffix(p_out.suffix + ".json"), "w", encoding="utf-8") as f:
+        with open(
+            p_out.with_suffix(p_out.suffix + ".json"), "w", encoding="utf-8"
+        ) as f:
             json.dump(meta, f, indent=2)
 
     return (p_in.name, True, f"{dt:.2f}s")
 
 
 @click.command()
-@click.option("--input-dir", type=click.Path(exists=True, file_okay=False, path_type=Path), required=True)
+@click.option(
+    "--input-dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    required=True,
+)
 @click.option("--output-dir", type=click.Path(path_type=Path), required=True)
-@click.option("--face-model", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
-@click.option("--lp-model", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+@click.option(
+    "--face-model",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+)
+@click.option(
+    "--lp-model",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+)
 @click.option("--device", default="auto", show_default=True, help="auto|cpu|cuda")
-@click.option("--workers", default=4, show_default=True, help="CPU workers. For CUDA, use 1 unless you REALLY know why.")
+@click.option(
+    "--workers",
+    default=3,
+    show_default=True,
+    help="CPU workers. For CUDA, use 1 unless you REALLY know why.",
+)
 @click.option("--overwrite", is_flag=True, help="Overwrite existing outputs.")
-@click.option("--suffix", default="_egoblur", show_default=True, help="Output filename suffix.")
-@click.option("--out-ext", default=".jpg", show_default=True, help="Output extension (.jpg/.png).")
-@click.option("--save-boxes", is_flag=True, help="Write sidecar JSON with boxes per image.")
+@click.option(
+    "--suffix", default="_egoblur", show_default=True, help="Output filename suffix."
+)
+@click.option(
+    "--out-ext", default=".jpg", show_default=True, help="Output extension (.jpg/.png)."
+)
+@click.option(
+    "--save-boxes", is_flag=True, help="Write sidecar JSON with boxes per image."
+)
 # thresholds + detection params
 @click.option("--face-threshold", default=0.3, show_default=True)
 @click.option("--lp-threshold", default=0.4, show_default=True)
 @click.option("--nms-iou", default=0.5, show_default=True)
 @click.option("--scale-factor", default=0.9, show_default=True)
 # blur params
-@click.option("--blur", "blur_mode", type=click.Choice(["soft", "pixelate"]), default="soft", show_default=True)
-@click.option("--blur-strength", default=0.5, show_default=True, help="Only for soft blur.")
-@click.option("--pixelate-factor", default=10, show_default=True, help="Only for pixelate.")
+@click.option(
+    "--blur",
+    "blur_mode",
+    type=click.Choice(["soft", "pixelate"]),
+    default="soft",
+    show_default=True,
+)
+@click.option(
+    "--blur-strength", default=0.5, show_default=True, help="Only for soft blur."
+)
+@click.option(
+    "--pixelate-factor", default=10, show_default=True, help="Only for pixelate."
+)
 def main(
     input_dir: Path,
     output_dir: Path,
@@ -285,7 +326,13 @@ def main(
     #     workers = 1
 
     # find images
-    images = sorted([p for p in input_dir.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS])
+    images = sorted(
+        [
+            p
+            for p in input_dir.iterdir()
+            if p.is_file() and p.suffix.lower() in IMAGE_EXTS
+        ]
+    )
     if not images:
         raise click.ClickException(f"No images found in {input_dir}")
 
@@ -346,12 +393,12 @@ def main(
 
     from concurrent.futures import ProcessPoolExecutor, as_completed
     import multiprocessing as mp
-    
+
     ok_n = 0
-    
+
     # CUDA + multiprocessing must use spawn to avoid forked CUDA contexts.
     ctx = mp.get_context("spawn")
-    
+
     with ProcessPoolExecutor(
         max_workers=workers,
         mp_context=ctx,
@@ -365,7 +412,7 @@ def main(
                 ok_n += 1
             else:
                 click.echo(f"FAIL {name}: {msg}", err=True)
-    
+
     click.echo(f"Done: {ok_n}/{len(tasks)} in {time.time() - t_all:.2f}s")
 
     # click.echo(f"Done: {ok_n}/{len(tasks)} in {time.time() - t_all:.2f}s")

@@ -47,6 +47,13 @@ RUN . /workspace/.venv/bin/activate && \
         Comfy-Lock.yaml && \
     echo "Snapshot restored successfully!"
 
+# Pin p2e custom node to a known-good commit that includes "P2E And Blend"
+ARG P2E_COMMIT=b06b31072d13afeb323ecff364a869377c631568
+RUN if [ -d /workspace/ComfyUI/custom_nodes/p2e ]; then \
+      git -C /workspace/ComfyUI/custom_nodes/p2e fetch --depth 1 origin ${P2E_COMMIT} && \
+      git -C /workspace/ComfyUI/custom_nodes/p2e checkout ${P2E_COMMIT}; \
+    fi
+
 # Install any missing dependencies that custom nodes need
 RUN . /workspace/.venv/bin/activate && \
     uv pip install numba opencv-contrib-python opencv-python
@@ -60,8 +67,8 @@ ARG EGOBLUR_REF=main
 RUN git clone --depth 1 --branch ${EGOBLUR_REF} https://github.com/facebookresearch/EgoBlur.git /workspace/EgoBlur
 
 # Clone p2e standalone library (required by postprocess.py for perspective-to-equirectangular)
-ARG P2E_REF=master
-RUN git clone --depth 1 --branch ${P2E_REF} https://github.com/amanbagrecha/p2e.git /workspace/p2e-lib
+RUN git clone https://github.com/amanbagrecha/p2e.git /workspace/p2e-lib && \
+    git -C /workspace/p2e-lib checkout ${P2E_COMMIT}
 
 # Copy inpainting workflow scripts and data
 COPY inpainting-workflow-master /workspace/inpainting/

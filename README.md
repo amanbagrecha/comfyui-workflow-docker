@@ -75,9 +75,9 @@ The easiest way to get started is using the pre-built Docker image from Docker H
 docker pull amanbagrecha/container-comfyui:latest
 ```
 
-### Step 2: Download Required Models
+### Step 2: Download Required Models (optional prefetch)
 
-Models are not included in the Docker image due to their size. Use the provided script to download all required models automatically:
+Models are not included in the Docker image due to their size. You can pre-download them now, or skip this step and let `run_full_pipeline.sh` auto-download missing models.
 
 ```bash
 # Run the model download script
@@ -129,8 +129,20 @@ Optional overrides:
 CONTAINER_NAME="comfyui-container" \
 POSTPROCESS_WORKERS=1 \
 EGOBLUR_WORKERS=3 \
+MODELS_ROOT="/absolute/path/to/shared-model-cache" \
+NVIDIA_VISIBLE_DEVICES=0 \
+COMFY_PORT=8188 \
 AUTO_DOWNLOAD_MODELS=1 \
 ./run_full_pipeline.sh
+```
+
+Multi-GPU pattern (one container per GPU, shared models):
+
+```bash
+NVIDIA_VISIBLE_DEVICES=0 CONTAINER_NAME=comfyui-g0 COMFY_PORT=8188 MODELS_ROOT=/data/shared-models SRC=/data/shard0 FINAL_OUTPUT_DIR=/data/out0 ./run_full_pipeline.sh
+NVIDIA_VISIBLE_DEVICES=1 CONTAINER_NAME=comfyui-g1 COMFY_PORT=8189 MODELS_ROOT=/data/shared-models SRC=/data/shard1 FINAL_OUTPUT_DIR=/data/out1 ./run_full_pipeline.sh
+NVIDIA_VISIBLE_DEVICES=2 CONTAINER_NAME=comfyui-g2 COMFY_PORT=8190 MODELS_ROOT=/data/shared-models SRC=/data/shard2 FINAL_OUTPUT_DIR=/data/out2 ./run_full_pipeline.sh
+NVIDIA_VISIBLE_DEVICES=3 CONTAINER_NAME=comfyui-g3 COMFY_PORT=8191 MODELS_ROOT=/data/shared-models SRC=/data/shard3 FINAL_OUTPUT_DIR=/data/out3 ./run_full_pipeline.sh
 ```
 
 ---

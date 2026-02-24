@@ -11,11 +11,11 @@ services:
       # Pipeline scripts mounted from host (no rebuild needed for code tweaks)
       - ./inpainting-workflow-master:/workspace/inpainting
       - ${MODELS_EGOBLUR_DIR:-./models/egoblur_gen2}:/workspace/inpainting/models/egoblur_gen2:ro
-      # Input/Output for ComfyUI and inpainting pipeline
-      - ./input:/workspace/ComfyUI/input
-      - ./output:/workspace/ComfyUI/output
-      - ./output-postprocessed:/workspace/output-postprocessed
-      - ./output-egoblur:/workspace/output-egoblur
+      # Input/Output for ComfyUI and inpainting pipeline - use container-specific dirs
+      - ${COMFYUI_DATA_DIR}/input:/workspace/ComfyUI/input
+      - ${COMFYUI_DATA_DIR}/output:/workspace/ComfyUI/output
+      - ${COMFYUI_DATA_DIR}/output-postprocessed:/workspace/output-postprocessed
+      - ${COMFYUI_DATA_DIR}/output-egoblur:/workspace/output-egoblur
       # p2e custom node (host-editable for debugging)
       - ./p2e-local:/workspace/ComfyUI/custom_nodes/p2e
       # Workflow file
@@ -25,7 +25,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: all
+              device_ids: ["${NVIDIA_VISIBLE_DEVICES:-0}"]
               capabilities: [gpu]
     environment:
       - NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-all}

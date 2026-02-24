@@ -265,7 +265,7 @@
   "447": {
     "inputs": {
       "confidence_threshold": 0.3,
-      "text_prompt": "glare",
+      "text_prompt": "sun glare",
       "max_detections": -1,
       "offload_model": false,
       "sam3_model": [

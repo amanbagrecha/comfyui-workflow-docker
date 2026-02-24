@@ -98,6 +98,47 @@ Force full reprocess of an existing batch:
 FORCE_REPROCESS=1 ./run_full_pipeline.sh
 ```
 
+Independent stage run (without ComfyUI API):
+
+```bash
+# Stop ComfyUI containers to free VRAM before downstream-only runs
+docker stop comfyui-g0 comfyui-g1
+
+# Postprocess-only (recommended worker setting: -j 6)
+docker run --rm --name postproc-g0 --gpus device=0 \
+  -v /root/.cache/torch:/root/.cache/torch \
+  -v /root/comfyui-workflow-docker/inpainting-workflow-master:/workspace/inpainting \
+  -v /root/comfyui-workflow-docker/p2e-local:/workspace/ComfyUI/custom_nodes/p2e \
+  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g0/output:/workspace/ComfyUI/output \
+  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g0/output-postprocessed:/workspace/output-postprocessed \
+  amanbagrecha/container-comfyui:latest \
+  python /workspace/inpainting/postprocess.py \
+    -i /workspace/ComfyUI/output/gpu0-batch \
+    -o /workspace/output-postprocessed/gpu0-batch \
+    --top-mask /workspace/inpainting/sky_mask_updated.png \
+    --pattern "*.jpg" \
+    -j 6
+
+# Egoblur-only (requested worker setting: --workers 12)
+docker run --rm --name egoblur-g0 --gpus device=0 \
+  -v /root/comfyui-workflow-docker/inpainting-workflow-master:/workspace/inpainting \
+  -v /root/comfyui-workflow-docker/models/egoblur_gen2:/workspace/inpainting/models/egoblur_gen2:ro \
+  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g0/output-postprocessed:/workspace/output-postprocessed \
+  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g0/output-egoblur:/workspace/output-egoblur \
+  amanbagrecha/container-comfyui:latest \
+  python /workspace/inpainting/egoblur_infer.py \
+    --input-dir /workspace/output-postprocessed/gpu0-batch \
+    --output-dir /workspace/output-egoblur/gpu0-batch \
+    --face-model /workspace/inpainting/models/egoblur_gen2/ego_blur_face_gen2.jit \
+    --lp-model /workspace/inpainting/models/egoblur_gen2/ego_blur_lp_gen2.jit \
+    --device cuda \
+    --workers 12
+```
+
+Count-check rule before/after egoblur:
+- Run egoblur only after `output-postprocessed/<batch>` count matches `output/<batch>` count.
+- Egoblur is complete for a batch when `output-egoblur/<batch>` count matches `output-postprocessed/<batch>` count.
+
 ## Image Output Quality
 - ComfyUI inpainting save node (`workflow-updated.json`) writes JPG at quality `80`.
 - Postprocess stage writes JPG at quality `90`.

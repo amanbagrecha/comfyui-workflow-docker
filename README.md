@@ -408,6 +408,107 @@ docker build -t container-comfyui:latest .
 docker compose up -d
 ```
 
+### Run Postprocess/EgoBlur Without ComfyUI API
+
+Use this mode when inpainting outputs already exist and you want to free ComfyUI VRAM before downstream stages.
+
+```bash
+# 1) Stop ComfyUI API containers (frees ~35GB VRAM/GPU in large runs)
+docker stop comfyui-g0 comfyui-g1
+
+# 2) Postprocess only (recommended: -j 6)
+tmux new-session -d -s postproc-g0 "bash -lc '
+docker run --rm --name postproc-g0 --gpus device=0 \
+  -v /root/.cache/torch:/root/.cache/torch \
+  -v /root/comfyui-workflow-docker/inpainting-workflow-master:/workspace/inpainting \
+  -v /root/comfyui-workflow-docker/p2e-local:/workspace/ComfyUI/custom_nodes/p2e \
+  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g0/output:/workspace/ComfyUI/output \
+  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g0/output-postprocessed:/workspace/output-postprocessed \
+  amanbagrecha/container-comfyui:latest \
+  python /workspace/inpainting/postprocess.py \
+    -i /workspace/ComfyUI/output/gpu0-batch \
+    -o /workspace/output-postprocessed/gpu0-batch \
+    --top-mask /workspace/inpainting/sky_mask_updated.png \
+    --pattern "*.jpg" \
+    -j 6
+'"
+
+tmux new-session -d -s postproc-g1 "bash -lc '
+docker run --rm --name postproc-g1 --gpus device=1 \
+  -v /root/.cache/torch:/root/.cache/torch \
+  -v /root/comfyui-workflow-docker/inpainting-workflow-master:/workspace/inpainting \
+  -v /root/comfyui-workflow-docker/p2e-local:/workspace/ComfyUI/custom_nodes/p2e \
+  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g1/output:/workspace/ComfyUI/output \
+  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g1/output-postprocessed:/workspace/output-postprocessed \
+  amanbagrecha/container-comfyui:latest \
+  python /workspace/inpainting/postprocess.py \
+    -i /workspace/ComfyUI/output/gpu1-batch \
+    -o /workspace/output-postprocessed/gpu1-batch \
+    --top-mask /workspace/inpainting/sky_mask_updated.png \
+    --pattern "*.jpg" \
+    -j 6
+'"
+
+# 3) Verify postprocess completed before egoblur
+python3 - <<'PY'
+from pathlib import Path
+exts={'.png','.jpg','.jpeg','.webp','.tif','.tiff'}
+for c,b in [('comfyui-g0','gpu0-batch'),('comfyui-g1','gpu1-batch')]:
+    base=Path('/root/comfyui-workflow-docker/comfyui_data')/c
+    i=sum(1 for p in (base/'output'/b).rglob('*') if p.is_file() and p.suffix.lower() in exts)
+    p=sum(1 for p in (base/'output-postprocessed'/b).rglob('*') if p.is_file() and p.suffix.lower() in exts)
+    print(f'{c} inpaint={i} postprocess={p}')
+PY
+
+# 4) Egoblur only (requested setting: --workers 12)
+tmux new-session -d -s egoblur-g0 "bash -lc '
+docker run --rm --name egoblur-g0 --gpus device=0 \
+  -v /root/comfyui-workflow-docker/inpainting-workflow-master:/workspace/inpainting \
+  -v /root/comfyui-workflow-docker/models/egoblur_gen2:/workspace/inpainting/models/egoblur_gen2:ro \
+  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g0/output-postprocessed:/workspace/output-postprocessed \
+  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g0/output-egoblur:/workspace/output-egoblur \
+  amanbagrecha/container-comfyui:latest \
+  python /workspace/inpainting/egoblur_infer.py \
+    --input-dir /workspace/output-postprocessed/gpu0-batch \
+    --output-dir /workspace/output-egoblur/gpu0-batch \
+    --face-model /workspace/inpainting/models/egoblur_gen2/ego_blur_face_gen2.jit \
+    --lp-model /workspace/inpainting/models/egoblur_gen2/ego_blur_lp_gen2.jit \
+    --device cuda \
+    --workers 12
+'"
+
+tmux new-session -d -s egoblur-g1 "bash -lc '
+docker run --rm --name egoblur-g1 --gpus device=1 \
+  -v /root/comfyui-workflow-docker/inpainting-workflow-master:/workspace/inpainting \
+  -v /root/comfyui-workflow-docker/models/egoblur_gen2:/workspace/inpainting/models/egoblur_gen2:ro \
+  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g1/output-postprocessed:/workspace/output-postprocessed \
+  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g1/output-egoblur:/workspace/output-egoblur \
+  amanbagrecha/container-comfyui:latest \
+  python /workspace/inpainting/egoblur_infer.py \
+    --input-dir /workspace/output-postprocessed/gpu1-batch \
+    --output-dir /workspace/output-egoblur/gpu1-batch \
+    --face-model /workspace/inpainting/models/egoblur_gen2/ego_blur_face_gen2.jit \
+    --lp-model /workspace/inpainting/models/egoblur_gen2/ego_blur_lp_gen2.jit \
+    --device cuda \
+    --workers 12
+'"
+
+# 5) Verify egoblur counts match postprocess counts
+python3 - <<'PY'
+from pathlib import Path
+exts={'.png','.jpg','.jpeg','.webp','.tif','.tiff'}
+for c,b in [('comfyui-g0','gpu0-batch'),('comfyui-g1','gpu1-batch')]:
+    base=Path('/root/comfyui-workflow-docker/comfyui_data')/c
+    p=sum(1 for p in (base/'output-postprocessed'/b).rglob('*') if p.is_file() and p.suffix.lower() in exts)
+    e=sum(1 for p in (base/'output-egoblur'/b).rglob('*') if p.is_file() and p.suffix.lower() in exts)
+    print(f'{c} postprocess={p} egoblur={e} match={p==e}')
+PY
+```
+
+Notes:
+- `postprocess.py` with high workers can fail partially on GPU OOM; `-j 6` is a safer parallel setting.
+- `egoblur_infer.py --workers 12` is aggressive; if you see instability, lower workers.
+
 ### System Monitoring
 
 ```bash

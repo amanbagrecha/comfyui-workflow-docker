@@ -14,9 +14,10 @@ This repository runs a 3-stage 360 panorama pipeline:
 ## One-Command Behavior
 `run_full_pipeline.sh` bootstraps setup automatically:
 - Creates required local directories.
-- Ensures `input/perspective_mask.png` exists (copies from `inpainting-workflow-master/perspective_mask.png` if missing).
+- Ensures `$COMFYUI_DATA_DIR/input/perspective_mask.png` exists (copies from `inpainting-workflow-master/perspective_mask.png` if missing).
 - Checks required models and runs `download-models.sh` if missing (`AUTO_DOWNLOAD_MODELS=1`).
-- Starts the container via `docker compose up -d` if not already up.
+- Starts the container via `docker compose -p "$CONTAINER_NAME" up -d` if not already up.
+- Preserves existing batch outputs by default (`FORCE_REPROCESS=0`) so reruns can skip/resume; use `FORCE_REPROCESS=1` for a full rerun.
 
 Useful env vars:
 - `SRC` (input dataset folder)
@@ -25,15 +26,19 @@ Useful env vars:
 - `POSTPROCESS_WORKERS` (default `1`)
 - `EGOBLUR_WORKERS` (default `3`)
 - `CONTAINER_NAME` (default `comfyui-container`)
+- `COMFYUI_DATA_DIR` (default `$REPO/comfyui_data/$CONTAINER_NAME`)
+- `NVIDIA_VISIBLE_DEVICES` (GPU index passed to compose and container)
+- `COMFY_PORT` (host port for ComfyUI API/UI)
 - `MODELS_ROOT` (shared model cache root)
 - `MODELS_COMFYUI_DIR` / `MODELS_EGOBLUR_DIR` (explicit model path overrides)
+- `FORCE_REPROCESS` (`0` default, set `1` to clear batch dirs and reprocess)
 
 ## What the Full Pipeline Does
 `run_full_pipeline.sh` performs the following stages:
 
 1. **Stage input dataset**
    - Reads images from `SRC`.
-   - Hardlinks them into `input/$BATCH_NAME`.
+   - Hardlinks them into `$COMFYUI_DATA_DIR/input/$BATCH_NAME`.
 
 2. **ComfyUI inpainting**
    - Runs `inpainting-workflow-master/comfyui_run.py` inside `$CONTAINER_NAME`.
@@ -81,16 +86,26 @@ BATCH_NAME="batch-$(date +%Y%m%d_%H%M%S)" \
 Check outputs:
 
 ```bash
-ls -lah input/<batch-name>
-ls -lah output/<batch-name>
-ls -lah output-postprocessed/<batch-name>
-ls -lah output-egoblur/<batch-name>
+ls -lah comfyui_data/<container-name>/input/<batch-name>
+ls -lah comfyui_data/<container-name>/output/<batch-name>
+ls -lah comfyui_data/<container-name>/output-postprocessed/<batch-name>
+ls -lah comfyui_data/<container-name>/output-egoblur/<batch-name>
 ```
+
+Force full reprocess of an existing batch:
+
+```bash
+FORCE_REPROCESS=1 ./run_full_pipeline.sh
+```
+
+## Image Output Quality
+- ComfyUI inpainting save node (`workflow-updated.json`) writes JPG at quality `80`.
+- Postprocess stage writes JPG at quality `90`.
 
 ## Host-Side Input and Output Paths
 - Source dataset: `/data/comfyui-workflow-docker/pano_data/<dataset-or-smoke-dir>`
-- Staged input: `input/<batch-name>`
-- Inpainting output: `output/<batch-name>`
-- Postprocess output: `output-postprocessed/<batch-name>`
-- Final egoblur output: `output-egoblur/<batch-name>`
+- Staged input: `comfyui_data/<container-name>/input/<batch-name>`
+- Inpainting output: `comfyui_data/<container-name>/output/<batch-name>`
+- Postprocess output: `comfyui_data/<container-name>/output-postprocessed/<batch-name>`
+- Final egoblur output: `comfyui_data/<container-name>/output-egoblur/<batch-name>`
 - Optional copied final output: `FINAL_OUTPUT_DIR/<batch-name>`

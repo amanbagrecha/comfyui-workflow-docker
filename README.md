@@ -98,7 +98,7 @@ The script will download:
 
 ### Step 3: Run Full Pipeline (one command)
 
-`run_full_pipeline.sh` now auto-creates local directories, auto-copies `perspective_mask.png` into `input/`, auto-starts Docker (if needed), and can auto-download models if missing.
+`run_full_pipeline.sh` now auto-creates local directories, auto-copies `perspective_mask.png` into `$COMFYUI_DATA_DIR/input/`, auto-starts Docker (if needed), and can auto-download models if missing.
 
 ```bash
 SRC="/absolute/path/to/your/input_images" \
@@ -120,8 +120,9 @@ BATCH_NAME="batch-$(date +%Y%m%d_%H%M%S)" \
 Notes:
 - `SRC` is your image folder.
 - Final egoblur outputs are copied to `FINAL_OUTPUT_DIR/<batch-name>/`.
-- Intermediate outputs remain in repo folders (`output/`, `output-postprocessed/`, `output-egoblur/`).
+- Intermediate outputs are stored under `comfyui_data/<container-name>/` by default.
 - Defaults: `POSTPROCESS_WORKERS=1`, `EGOBLUR_WORKERS=3`.
+- Default rerun behavior is skip/resume (`FORCE_REPROCESS=0`); set `FORCE_REPROCESS=1` to clear the batch and rerun from scratch.
 
 Optional overrides:
 
@@ -133,8 +134,13 @@ MODELS_ROOT="/absolute/path/to/shared-model-cache" \
 NVIDIA_VISIBLE_DEVICES=0 \
 COMFY_PORT=8188 \
 AUTO_DOWNLOAD_MODELS=1 \
+FORCE_REPROCESS=0 \
 ./run_full_pipeline.sh
 ```
+
+Image quality defaults:
+- ComfyUI inpainting output (`workflow-updated.json`) saves JPG at quality `80`.
+- Postprocess stage saves JPG at quality `90`.
 
 Multi-GPU pattern (one container per GPU, shared models):
 
@@ -183,13 +189,11 @@ container/
 │       ├── ego_blur_face_gen2.jit    # Face detection model (~400MB)
 │       └── ego_blur_lp_gen2.jit      # License plate model (~400MB)
 │
-├── input/                       # Input images directory
-│   ├── *.jpg                   # Your 360° panorama images
-│   └── perspective_mask.png    # Mask for inpainting
-│
-├── output/                      # ComfyUI outputs
-├── output-postprocessed/       # Postprocessed outputs
-└── output-egoblur/             # Final outputs with blurring
+├── comfyui_data/<container-name>/
+│   ├── input/                  # Staged input images + perspective_mask.png
+│   ├── output/                 # ComfyUI outputs
+│   ├── output-postprocessed/   # Postprocessed outputs
+│   └── output-egoblur/         # Final outputs with blurring
 ```
 
 ---
@@ -255,18 +259,18 @@ Process images through ComfyUI workflow with SAM3 segmentation and inpainting.
 ```bash
 docker exec comfyui-container python /workspace/inpainting/comfyui_run.py \
   --workflow-json /workspace/workflow.json \
-  --input-dir /workspace/ComfyUI/input \
+  --input-dir /workspace/ComfyUI/input/<batch-name> \
   --mask /workspace/ComfyUI/input/perspective_mask.png \
-  --output-dir /workspace/ComfyUI/output \
+  --output-dir /workspace/ComfyUI/output/<batch-name> \
   --workers 3
 
 # Or use the bin script:
 ./bin/comfyui-run --workflow-json /workspace/workflow.json \
-  --input-dir /workspace/ComfyUI/input \
+  --input-dir /workspace/ComfyUI/input/<batch-name> \
   --mask /workspace/ComfyUI/input/perspective_mask.png
 ```
 
-**Output:** `output/YYYY-MM-DD/ComfyUI_*.jpg`
+**Output:** `comfyui_data/<container-name>/output/<batch-name>/*.jpg`
 
 ### Stage 2: Postprocessing
 
@@ -274,19 +278,19 @@ Apply perspective-to-equirectangular transformation and sky blending.
 
 ```bash
 docker exec comfyui-container python /workspace/inpainting/postprocess.py \
-  -i /workspace/ComfyUI/output/2025-12-26 \
-  -o /workspace/output-postprocessed \
+  -i /workspace/ComfyUI/output/<batch-name> \
+  -o /workspace/output-postprocessed/<batch-name> \
   --top-mask /workspace/inpainting/sky_mask_updated.png \
   --pattern "*.jpg" \
   -j 1
 
 # Or use the bin script:
-./bin/postprocess -i /workspace/ComfyUI/output/2025-12-26 \
-  -o /workspace/output-postprocessed \
+./bin/postprocess -i /workspace/ComfyUI/output/<batch-name> \
+  -o /workspace/output-postprocessed/<batch-name> \
   --top-mask /workspace/inpainting/sky_mask_updated.png
 ```
 
-**Output:** `output-postprocessed/ComfyUI_*.jpg`
+**Output:** `comfyui_data/<container-name>/output-postprocessed/<batch-name>/*.jpg`
 
 ### Stage 3: EgoBlur (Privacy Protection)
 
@@ -294,51 +298,37 @@ Blur faces and license plates for privacy.
 
 ```bash
 docker exec comfyui-container python /workspace/inpainting/egoblur_infer.py \
-  --input-dir /workspace/output-postprocessed \
-  --output-dir /workspace/output-egoblur \
+  --input-dir /workspace/output-postprocessed/<batch-name> \
+  --output-dir /workspace/output-egoblur/<batch-name> \
   --face-model /workspace/inpainting/models/egoblur_gen2/ego_blur_face_gen2.jit \
   --lp-model /workspace/inpainting/models/egoblur_gen2/ego_blur_lp_gen2.jit \
   --workers 1
 
 # Or use the bin script:
-./bin/egoblur --input-dir /workspace/output-postprocessed \
-  --output-dir /workspace/output-egoblur \
+./bin/egoblur --input-dir /workspace/output-postprocessed/<batch-name> \
+  --output-dir /workspace/output-egoblur/<batch-name> \
   --face-model /workspace/inpainting/models/egoblur_gen2/ego_blur_face_gen2.jit \
   --lp-model /workspace/inpainting/models/egoblur_gen2/ego_blur_lp_gen2.jit
 ```
 
-**Output:** `output-egoblur/ComfyUI_*_egoblur.jpg`
+**Output:** `comfyui_data/<container-name>/output-egoblur/<batch-name>/*.jpg`
 
 ### Complete Pipeline Example
 
 ```bash
-# 1. Place your 360° images in input/
-cp my_pano_*.jpg input/
+# 1. Run complete 3-stage pipeline
+SRC="/absolute/path/to/input_images"
+FINAL_OUTPUT_DIR="/absolute/path/to/final_outputs"
+BATCH_NAME="batch-$(date +%Y%m%d_%H%M%S)"
+SRC="$SRC" FINAL_OUTPUT_DIR="$FINAL_OUTPUT_DIR" BATCH_NAME="$BATCH_NAME" ./run_full_pipeline.sh
 
-# 2. Run ComfyUI inpainting
-docker exec comfyui-container python /workspace/inpainting/comfyui_run.py \
-  --workflow-json /workspace/workflow.json \
-  --input-dir /workspace/ComfyUI/input \
-  --mask /workspace/ComfyUI/input/perspective_mask.png
+# 2. Check stage outputs for this batch
+ls -lah "comfyui_data/comfyui-container/output/$BATCH_NAME"
+ls -lah "comfyui_data/comfyui-container/output-postprocessed/$BATCH_NAME"
+ls -lah "comfyui_data/comfyui-container/output-egoblur/$BATCH_NAME"
 
-# 3. Get today's date for output directory
-TODAY=$(date +%Y-%m-%d)
-
-# 4. Run postprocessing
-docker exec comfyui-container python /workspace/inpainting/postprocess.py \
-  -i /workspace/ComfyUI/output/$TODAY \
-  -o /workspace/output-postprocessed \
-  --top-mask /workspace/inpainting/sky_mask_updated.png
-
-# 5. Run EgoBlur
-docker exec comfyui-container python /workspace/inpainting/egoblur_infer.py \
-  --input-dir /workspace/output-postprocessed \
-  --output-dir /workspace/output-egoblur \
-  --face-model /workspace/inpainting/models/egoblur_gen2/ego_blur_face_gen2.jit \
-  --lp-model /workspace/inpainting/models/egoblur_gen2/ego_blur_lp_gen2.jit
-
-# 6. Find your final outputs
-ls -lah output-egoblur/
+# 3. Optional copied final output
+ls -lah "$FINAL_OUTPUT_DIR/$BATCH_NAME"
 ```
 
 ---
@@ -501,10 +491,10 @@ sudo lsof -i :8188
 ```yaml
 - ./models/comfyui:/workspace/ComfyUI/models
 - ./models/egoblur_gen2:/workspace/inpainting/models/egoblur_gen2
-- ./input:/workspace/ComfyUI/input
-- ./output:/workspace/ComfyUI/output
-- ./output-postprocessed:/workspace/output-postprocessed
-- ./output-egoblur:/workspace/output-egoblur
+- ${COMFYUI_DATA_DIR}/input:/workspace/ComfyUI/input
+- ${COMFYUI_DATA_DIR}/output:/workspace/ComfyUI/output
+- ${COMFYUI_DATA_DIR}/output-postprocessed:/workspace/output-postprocessed
+- ${COMFYUI_DATA_DIR}/output-egoblur:/workspace/output-egoblur
 - ./workflow-updated.json:/workspace/workflow.json:ro
 ```
 
@@ -556,9 +546,7 @@ docker build -t container-comfyui:latest .
 docker compose up -d
 
 # Process images (full pipeline)
-docker exec comfyui-container python /workspace/inpainting/comfyui_run.py --workflow-json /workspace/workflow.json --input-dir /workspace/ComfyUI/input --mask /workspace/ComfyUI/input/perspective_mask.png
-docker exec comfyui-container python /workspace/inpainting/postprocess.py -i /workspace/ComfyUI/output/$(date +%Y-%m-%d) -o /workspace/output-postprocessed --top-mask /workspace/inpainting/sky_mask_updated.png
-docker exec comfyui-container python /workspace/inpainting/egoblur_infer.py --input-dir /workspace/output-postprocessed --output-dir /workspace/output-egoblur --face-model /workspace/inpainting/models/egoblur_gen2/ego_blur_face_gen2.jit --lp-model /workspace/inpainting/models/egoblur_gen2/ego_blur_lp_gen2.jit
+SRC="/absolute/path/to/input_images" FINAL_OUTPUT_DIR="/absolute/path/to/final_outputs" BATCH_NAME="batch-$(date +%Y%m%d_%H%M%S)" ./run_full_pipeline.sh
 
 # Stop
 docker compose down

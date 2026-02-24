@@ -732,7 +732,7 @@
       "filename_number_start": "false",
       "extension": "jpg",
       "dpi": 300,
-      "quality": 95,
+      "quality": 80,
       "optimize_image": "true",
       "lossless_webp": "false",
       "overwrite_mode": "prefix_as_filename",

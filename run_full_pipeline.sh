@@ -4,11 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 REPO="${REPO:-$SCRIPT_DIR}"
-SRC="${SRC:-$REPO/input}"
+CONTAINER_NAME="${CONTAINER_NAME:-comfyui-container}"
+COMFYUI_DATA_DIR="${COMFYUI_DATA_DIR:-$REPO/comfyui_data/$CONTAINER_NAME}"
+SRC="${SRC:-$COMFYUI_DATA_DIR/input}"
 BATCH_NAME="${BATCH_NAME:-batch-$(date +%Y%m%d_%H%M%S)}"
 POSTPROCESS_WORKERS="${POSTPROCESS_WORKERS:-1}"
 EGOBLUR_WORKERS="${EGOBLUR_WORKERS:-3}"
-CONTAINER_NAME="${CONTAINER_NAME:-comfyui-container}"
 FINAL_OUTPUT_DIR="${FINAL_OUTPUT_DIR:-}"
 AUTO_DOWNLOAD_MODELS="${AUTO_DOWNLOAD_MODELS:-1}"
 MODELS_ROOT="${MODELS_ROOT:-$REPO/models}"
@@ -16,7 +17,8 @@ MODELS_COMFYUI_DIR="${MODELS_COMFYUI_DIR:-$MODELS_ROOT/comfyui}"
 MODELS_EGOBLUR_DIR="${MODELS_EGOBLUR_DIR:-$MODELS_ROOT/egoblur_gen2}"
 COMFY_READY_TIMEOUT="${COMFY_READY_TIMEOUT:-300}"
 COMFY_READY_POLL="${COMFY_READY_POLL:-2}"
-RUN_ID="$(date +%Y%m%d_%H%M%S)"
+FORCE_REPROCESS="${FORCE_REPROCESS:-0}"
+RUN_ID="$(date +%Y%m%d_%H%M%S)_${CONTAINER_NAME}_$$"
 
 LOG_DIR="$REPO/logs"
 mkdir -p "$LOG_DIR"
@@ -34,6 +36,10 @@ echo "REPO=$REPO"
 echo "SRC=$SRC"
 echo "BATCH_NAME=$BATCH_NAME"
 echo "CONTAINER_NAME=$CONTAINER_NAME"
+echo "COMFYUI_DATA_DIR=$COMFYUI_DATA_DIR"
+echo "NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-unset}"
+echo "COMFY_PORT=${COMFY_PORT:-8188}"
+echo "FORCE_REPROCESS=$FORCE_REPROCESS"
 echo "POSTPROCESS_WORKERS=$POSTPROCESS_WORKERS"
 echo "EGOBLUR_WORKERS=$EGOBLUR_WORKERS"
 echo "MODELS_COMFYUI_DIR=$MODELS_COMFYUI_DIR"
@@ -44,10 +50,10 @@ if [ -n "$FINAL_OUTPUT_DIR" ]; then
 fi
 
 mkdir -p \
-  "$REPO/input" \
-  "$REPO/output" \
-  "$REPO/output-postprocessed" \
-  "$REPO/output-egoblur" \
+  "$COMFYUI_DATA_DIR/input" \
+  "$COMFYUI_DATA_DIR/output" \
+  "$COMFYUI_DATA_DIR/output-postprocessed" \
+  "$COMFYUI_DATA_DIR/output-egoblur" \
   "$MODELS_COMFYUI_DIR" \
   "$MODELS_EGOBLUR_DIR" \
   "$REPO/inpainting-workflow-master/models/egoblur_gen2"
@@ -79,16 +85,17 @@ if [ "$need_download" = "1" ]; then
   fi
 fi
 
-if [ ! -f "$REPO/input/perspective_mask.png" ]; then
-  cp "$REPO/inpainting-workflow-master/perspective_mask.png" "$REPO/input/perspective_mask.png"
-  echo "Copied perspective mask to $REPO/input/perspective_mask.png"
+if [ ! -f "$COMFYUI_DATA_DIR/input/perspective_mask.png" ]; then
+  cp "$REPO/inpainting-workflow-master/perspective_mask.png" "$COMFYUI_DATA_DIR/input/perspective_mask.png"
+  echo "Copied perspective mask to $COMFYUI_DATA_DIR/input/perspective_mask.png"
 fi
 
 echo "Ensuring container is up via docker compose"
 CONTAINER_NAME="$CONTAINER_NAME" \
+COMFYUI_DATA_DIR="$COMFYUI_DATA_DIR" \
 MODELS_COMFYUI_DIR="$MODELS_COMFYUI_DIR" \
 MODELS_EGOBLUR_DIR="$MODELS_EGOBLUR_DIR" \
-docker compose up -d
+docker compose -p "${CONTAINER_NAME}" up -d
 
 echo "Waiting for ComfyUI API readiness inside container"
 docker exec -i \
@@ -121,18 +128,22 @@ print(f"ERROR: ComfyUI API not ready within {timeout}s. Last error: {last_error}
 sys.exit(1)
 PY
 
-DST="$REPO/input/$BATCH_NAME"
-OUT1="$REPO/output/$BATCH_NAME"
-OUT2="$REPO/output-postprocessed/$BATCH_NAME"
-OUT3="$REPO/output-egoblur/$BATCH_NAME"
+DST="$COMFYUI_DATA_DIR/input/$BATCH_NAME"
+OUT1="$COMFYUI_DATA_DIR/output/$BATCH_NAME"
+OUT2="$COMFYUI_DATA_DIR/output-postprocessed/$BATCH_NAME"
+OUT3="$COMFYUI_DATA_DIR/output-egoblur/$BATCH_NAME"
 
 if [ ! -d "$SRC" ]; then
   echo "ERROR: SRC directory not found: $SRC"
   exit 1
 fi
 
-echo "Preparing clean batch directories..."
-rm -rf "$DST" "$OUT1" "$OUT2" "$OUT3"
+if [ "$FORCE_REPROCESS" = "1" ]; then
+  echo "FORCE_REPROCESS=1, clearing batch directories..."
+  rm -rf "$DST" "$OUT1" "$OUT2" "$OUT3"
+else
+  echo "FORCE_REPROCESS=0, preserving existing outputs for skip/resume behavior..."
+fi
 mkdir -p "$DST" "$OUT1" "$OUT2" "$OUT3"
 
 S_HARD=$(date +%s)

@@ -16,6 +16,8 @@ services:
       - ./output:/workspace/ComfyUI/output
       - ./output-postprocessed:/workspace/output-postprocessed
       - ./output-egoblur:/workspace/output-egoblur
+      # p2e custom node (host-editable for debugging)
+      - ./p2e-local:/workspace/ComfyUI/custom_nodes/p2e
       # Workflow file
       - ./workflow-updated.json:/workspace/workflow.json:ro
     deploy:

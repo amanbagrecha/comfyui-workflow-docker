@@ -48,7 +48,7 @@ RUN . /workspace/.venv/bin/activate && \
     echo "Snapshot restored successfully!"
 
 # Pin p2e custom node to a known-good commit that includes "P2E And Blend"
-ARG P2E_COMMIT=b06b31072d13afeb323ecff364a869377c631568
+ARG P2E_COMMIT=1968f6aed36b300be3599ea5053e0206aaa5704b
 RUN if [ -d /workspace/ComfyUI/custom_nodes/p2e ]; then \
       git -C /workspace/ComfyUI/custom_nodes/p2e fetch --depth 1 origin ${P2E_COMMIT} && \
       git -C /workspace/ComfyUI/custom_nodes/p2e checkout ${P2E_COMMIT}; \

@@ -18,6 +18,8 @@ MODELS_EGOBLUR_DIR="${MODELS_EGOBLUR_DIR:-$MODELS_ROOT/egoblur_gen2}"
 COMFY_READY_TIMEOUT="${COMFY_READY_TIMEOUT:-300}"
 COMFY_READY_POLL="${COMFY_READY_POLL:-2}"
 FORCE_REPROCESS="${FORCE_REPROCESS:-0}"
+AUTO_INSTALL_NVIDIA_TOOLKIT="${AUTO_INSTALL_NVIDIA_TOOLKIT:-1}"
+NVIDIA_CUDA_TEST_IMAGE="${NVIDIA_CUDA_TEST_IMAGE:-nvidia/cuda:12.6.0-base-ubuntu22.04}"
 RUN_ID="$(date +%Y%m%d_%H%M%S)_${CONTAINER_NAME}_$$"
 
 LOG_DIR="$REPO/logs"
@@ -40,6 +42,7 @@ echo "COMFYUI_DATA_DIR=$COMFYUI_DATA_DIR"
 echo "NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-unset}"
 echo "COMFY_PORT=${COMFY_PORT:-8188}"
 echo "FORCE_REPROCESS=$FORCE_REPROCESS"
+echo "AUTO_INSTALL_NVIDIA_TOOLKIT=$AUTO_INSTALL_NVIDIA_TOOLKIT"
 echo "POSTPROCESS_WORKERS=$POSTPROCESS_WORKERS"
 echo "EGOBLUR_WORKERS=$EGOBLUR_WORKERS"
 echo "MODELS_COMFYUI_DIR=$MODELS_COMFYUI_DIR"
@@ -57,6 +60,92 @@ mkdir -p \
   "$MODELS_COMFYUI_DIR" \
   "$MODELS_EGOBLUR_DIR" \
   "$REPO/inpainting-workflow-master/models/egoblur_gen2"
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "ERROR: docker is not installed or not in PATH."
+  exit 1
+fi
+
+if ! docker compose version >/dev/null 2>&1; then
+  echo "ERROR: docker compose is not available."
+  exit 1
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "ERROR: python3 is required on host for helper steps."
+  exit 1
+fi
+
+if ! command -v wget >/dev/null 2>&1; then
+  echo "ERROR: wget is required (used by download-models.sh)."
+  exit 1
+fi
+
+if ! command -v nvidia-smi >/dev/null 2>&1; then
+  echo "ERROR: nvidia-smi not found on host. NVIDIA drivers/GPU are required for this pipeline."
+  exit 1
+fi
+
+docker_gpu_ready() {
+  docker run --rm --gpus all "$NVIDIA_CUDA_TEST_IMAGE" nvidia-smi >/dev/null 2>&1
+}
+
+run_privileged() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    echo "ERROR: Need root/sudo to install NVIDIA Container Toolkit."
+    return 1
+  fi
+}
+
+install_nvidia_container_toolkit() {
+  if [ ! -r /etc/os-release ]; then
+    echo "ERROR: Cannot detect OS (missing /etc/os-release)."
+    return 1
+  fi
+
+  . /etc/os-release
+  if [ "${ID:-}" != "ubuntu" ] && [[ " ${ID_LIKE:-} " != *" debian "* ]] && [[ " ${ID_LIKE:-} " != *" ubuntu "* ]]; then
+    echo "ERROR: Auto-install currently supports Ubuntu/Debian only."
+    return 1
+  fi
+
+  echo "Installing NVIDIA Container Toolkit..."
+  run_privileged sh -c 'set -e; apt-get update; apt-get install -y curl gpg ca-certificates'
+  run_privileged mkdir -p /usr/share/keyrings
+  curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+    run_privileged gpg --dearmor --batch --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+  curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+    sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+    run_privileged tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null
+  run_privileged apt-get update
+  run_privileged apt-get install -y nvidia-container-toolkit
+  run_privileged nvidia-ctk runtime configure --runtime=docker
+  run_privileged systemctl restart docker
+}
+
+echo "Checking Docker GPU runtime"
+if docker_gpu_ready; then
+  echo "Docker GPU runtime: OK"
+else
+  echo "Docker GPU runtime: NOT READY"
+  if [ "$AUTO_INSTALL_NVIDIA_TOOLKIT" = "1" ]; then
+    install_nvidia_container_toolkit
+    if docker_gpu_ready; then
+      echo "Docker GPU runtime: OK after toolkit installation"
+    else
+      echo "ERROR: Docker GPU runtime still not ready after installation attempt."
+      echo "Please verify NVIDIA Container Toolkit + Docker runtime setup manually."
+      exit 1
+    fi
+  else
+    echo "ERROR: GPU runtime not ready and AUTO_INSTALL_NVIDIA_TOOLKIT=0"
+    exit 1
+  fi
+fi
 
 required_files=(
   "$MODELS_COMFYUI_DIR/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"

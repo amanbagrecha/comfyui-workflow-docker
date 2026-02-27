@@ -1,0 +1,399 @@
+{
+  "1": {
+    "inputs": {
+      "model_path": "models/sam3/sam3.pt"
+    },
+    "class_type": "LoadSAM3Model",
+    "_meta": {
+      "title": "Load SAM3 Model"
+    }
+  },
+  "2": {
+    "inputs": {
+      "image": "example_image.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Panorama"
+    }
+  },
+  "3": {
+    "inputs": {
+      "width": 4000,
+      "height": 2000,
+      "interpolation": "area",
+      "method": "keep proportion",
+      "condition": "downscale if bigger",
+      "multiple_of": 2,
+      "image": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "ImageResize+",
+    "_meta": {
+      "title": "Resize For SAM3"
+    }
+  },
+  "4": {
+    "inputs": {
+      "rows": 1,
+      "cols": 2,
+      "overlap": 0,
+      "overlap_x": 0,
+      "overlap_y": 0,
+      "image": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "ImageTile+",
+    "_meta": {
+      "title": "Tile Panorama (1x2)"
+    }
+  },
+  "5": {
+    "inputs": {
+      "start": 0,
+      "length": 1,
+      "image": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "ImageFromBatch+",
+    "_meta": {
+      "title": "Tile Left"
+    }
+  },
+  "6": {
+    "inputs": {
+      "start": 1,
+      "length": 1,
+      "image": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "ImageFromBatch+",
+    "_meta": {
+      "title": "Tile Right"
+    }
+  },
+  "7": {
+    "inputs": {
+      "confidence_threshold": 0.5,
+      "text_prompt": "sky",
+      "max_detections": -1,
+      "offload_model": false,
+      "sam3_model": [
+        "1",
+        0
+      ],
+      "image": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "SAM3Grounding",
+    "_meta": {
+      "title": "SAM3 Sky (Left)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "confidence_threshold": 0.4,
+      "text_prompt": "sun glare",
+      "max_detections": -1,
+      "offload_model": false,
+      "sam3_model": [
+        "1",
+        0
+      ],
+      "image": [
+        "5",
+        0
+      ]
+    },
+    "class_type": "SAM3Grounding",
+    "_meta": {
+      "title": "SAM3 Glare (Left)"
+    }
+  },
+  "9": {
+    "inputs": {
+      "masks": [
+        "7",
+        0
+      ]
+    },
+    "class_type": "Masks Combine Batch",
+    "_meta": {
+      "title": "Combine Sky Detections (Left)"
+    }
+  },
+  "10": {
+    "inputs": {
+      "masks": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "Masks Combine Batch",
+    "_meta": {
+      "title": "Combine Glare Detections (Left)"
+    }
+  },
+  "11": {
+    "inputs": {
+      "mask_a": [
+        "9",
+        0
+      ],
+      "mask_b": [
+        "10",
+        0
+      ]
+    },
+    "class_type": "Masks Combine Regions",
+    "_meta": {
+      "title": "Sky+Glare Mask (Left)"
+    }
+  },
+  "12": {
+    "inputs": {
+      "confidence_threshold": 0.5,
+      "text_prompt": "sky",
+      "max_detections": -1,
+      "offload_model": false,
+      "sam3_model": [
+        "1",
+        0
+      ],
+      "image": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "SAM3Grounding",
+    "_meta": {
+      "title": "SAM3 Sky (Right)"
+    }
+  },
+  "13": {
+    "inputs": {
+      "confidence_threshold": 0.4,
+      "text_prompt": "sun glare",
+      "max_detections": -1,
+      "offload_model": false,
+      "sam3_model": [
+        "1",
+        0
+      ],
+      "image": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "SAM3Grounding",
+    "_meta": {
+      "title": "SAM3 Glare (Right)"
+    }
+  },
+  "14": {
+    "inputs": {
+      "masks": [
+        "12",
+        0
+      ]
+    },
+    "class_type": "Masks Combine Batch",
+    "_meta": {
+      "title": "Combine Sky Detections (Right)"
+    }
+  },
+  "15": {
+    "inputs": {
+      "masks": [
+        "13",
+        0
+      ]
+    },
+    "class_type": "Masks Combine Batch",
+    "_meta": {
+      "title": "Combine Glare Detections (Right)"
+    }
+  },
+  "16": {
+    "inputs": {
+      "mask_a": [
+        "14",
+        0
+      ],
+      "mask_b": [
+        "15",
+        0
+      ]
+    },
+    "class_type": "Masks Combine Regions",
+    "_meta": {
+      "title": "Sky+Glare Mask (Right)"
+    }
+  },
+  "17": {
+    "inputs": {
+      "mask": [
+        "11",
+        0
+      ]
+    },
+    "class_type": "MaskToImage",
+    "_meta": {
+      "title": "Mask To Image (Left)"
+    }
+  },
+  "18": {
+    "inputs": {
+      "mask": [
+        "16",
+        0
+      ]
+    },
+    "class_type": "MaskToImage",
+    "_meta": {
+      "title": "Mask To Image (Right)"
+    }
+  },
+  "19": {
+    "inputs": {
+      "image1": [
+        "17",
+        0
+      ],
+      "image2": [
+        "18",
+        0
+      ]
+    },
+    "class_type": "ImageBatch",
+    "_meta": {
+      "title": "Batch Tile Masks"
+    }
+  },
+  "20": {
+    "inputs": {
+      "tiles": [
+        "19",
+        0
+      ],
+      "overlap_x": [
+        "4",
+        3
+      ],
+      "overlap_y": [
+        "4",
+        4
+      ],
+      "rows": 1,
+      "cols": 2
+    },
+    "class_type": "ImageUntile+",
+    "_meta": {
+      "title": "Rejoin Tile Masks"
+    }
+  },
+  "21": {
+    "inputs": {
+      "image": [
+        "20",
+        0
+      ],
+      "channel": "red"
+    },
+    "class_type": "ImageToMask",
+    "_meta": {
+      "title": "Back To Mask"
+    }
+  },
+  "22": {
+    "inputs": {
+      "mask": [
+        "21",
+        0
+      ]
+    },
+    "class_type": "MaskToImage",
+    "_meta": {
+      "title": "Final SAM3 Mask Image"
+    }
+  },
+  "23": {
+    "inputs": {
+      "images": [
+        "4",
+        0
+      ],
+      "border_width": 2,
+      "number_of_columns": 2,
+      "max_cell_size": 1024,
+      "border_red": 255,
+      "border_green": 255,
+      "border_blue": 255
+    },
+    "class_type": "Create Grid Image from Batch",
+    "_meta": {
+      "title": "Tile Preview Grid"
+    }
+  },
+  "24": {
+    "inputs": {
+      "images": [
+        "23",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Tiles"
+    }
+  },
+  "25": {
+    "inputs": {
+      "images": [
+        "22",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Final SAM3 Mask"
+    }
+  },
+  "26": {
+    "inputs": {
+      "images": [
+        "22",
+        0
+      ],
+      "output_path": "sam3-tiled",
+      "filename_prefix": "sam3_mask",
+      "filename_delimiter": "_",
+      "filename_number_padding": 4,
+      "filename_number_start": "false",
+      "extension": "png",
+      "dpi": 300,
+      "quality": 100,
+      "optimize_image": "true",
+      "lossless_webp": "false",
+      "overwrite_mode": "prefix_as_filename",
+      "show_history": "false",
+      "show_history_by_prefix": "false",
+      "embed_workflow": "true",
+      "show_previews": "false"
+    },
+    "class_type": "Image Save",
+    "_meta": {
+      "title": "Save Final SAM3 Mask"
+    }
+  }
+}

@@ -180,6 +180,11 @@ Count-check rule before/after egoblur:
 - Final egoblur output: `comfyui_data/<container-name>/output-egoblur/<batch-name>`
 - Optional copied final output: `FINAL_OUTPUT_DIR/<batch-name>`
 
+## SAM3 Tiled Workflow TODOs
+- [ ] Measure average per-image runtime for `workflow_SAM3.json` and record timings for at least one real batch.
+- [ ] Compare resolution choices (`4000x2000` vs `2000x4000`) and decide the default target size based on quality + speed.
+- [ ] Evaluate overlap and edge padding (start with 10 px border pad before SAM3, then unpad) to reduce boundary waviness; document best save settings.
+
 ## Debug: Running ComfyUI Container Only
 
 To start just the ComfyUI container (without running the full pipeline) for debugging or API access:

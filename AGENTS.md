@@ -67,6 +67,32 @@ Useful env vars (with defaults):
 
 ## How to Run
 
+Use `run_full_pipeline.sh` for normal end-to-end runs. If you want every runtime setting to be explicit in the command (with defaults where defaults exist), use:
+
+```bash
+SRC="" \
+FINAL_OUTPUT_DIR="" \
+BATCH_NAME="batch-$(date +%Y%m%d_%H%M%S)" \
+POSTPROCESS_WORKERS=1 \
+EGOBLUR_WORKERS=3 \
+CONTAINER_NAME="comfyui-container" \
+COMFYUI_DATA_DIR="./comfyui_data/comfyui-container" \
+NVIDIA_VISIBLE_DEVICES=0 \
+COMFY_PORT=8188 \
+MODELS_ROOT="./models" \
+MODELS_COMFYUI_DIR="./models/comfyui" \
+MODELS_EGOBLUR_DIR="./models/egoblur_gen2" \
+AUTO_DOWNLOAD_MODELS=1 \
+FORCE_REPROCESS=0 \
+AUTO_INSTALL_NVIDIA_TOOLKIT=1 \
+COMFY_READY_TIMEOUT=300 \
+COMFY_READY_POLL=2 \
+NVIDIA_CUDA_TEST_IMAGE="nvidia/cuda:12.6.0-base-ubuntu22.04" \
+./run_full_pipeline.sh
+```
+
+Set `SRC` and `FINAL_OUTPUT_DIR` to real paths when needed.
+
 Single-command run:
 
 ```bash

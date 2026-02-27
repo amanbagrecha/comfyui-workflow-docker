@@ -107,6 +107,19 @@ BATCH_NAME="batch-$(date +%Y%m%d_%H%M%S)" \
 ./run_full_pipeline.sh
 ```
 
+Default values:
+| Variable | Default |
+|----------|---------|
+| MODELS_ROOT | ./models |
+| MODELS_COMFYUI_DIR | ./models/comfyui |
+| MODELS_EGOBLUR_DIR | ./models/egoblur_gen2 |
+| COMFYUI_DATA_DIR | ./comfyui_data/comfyui-container |
+| CONTAINER_NAME | comfyui-container |
+| POSTPROCESS_WORKERS | 1 |
+| EGOBLUR_WORKERS | 3 |
+| FORCE_REPROCESS | 0 |
+| AUTO_DOWNLOAD_MODELS | 1 |
+
 For shared models across multiple repo copies or machines mounted on shared storage:
 
 ```bash
@@ -157,49 +170,6 @@ NVIDIA_VISIBLE_DEVICES=3 CONTAINER_NAME=comfyui-g3 COMFY_PORT=8191 MODELS_ROOT=/
 
 If you prefer to build the Docker image yourself, follow these instructions:
 
-## Required Files & Directory Structure
-
-Before building, ensure you have the following files and directories:
-
-```
-container/
-├── Dockerfile                    # Main Dockerfile
-├── docker-compose.yml           # Docker Compose configuration
-├── download-models.sh           # Automated model download script
-├── Comfy-Lock.yaml              # ComfyUI snapshot for reproducible builds
-├── workflow-updated.json        # ComfyUI workflow definition
-├── .dockerignore                # Files to exclude from build
-│
-├── bin/                         # Executable scripts
-│   ├── comfyui-run             # ComfyUI workflow runner
-│   ├── postprocess             # Perspective-to-equirectangular postprocessing
-│   └── egoblur                 # Face & license plate blurring
-│
-├── inpainting-workflow-master/  # Inpainting scripts
-│   ├── comfyui_run.py
-│   ├── egoblur_infer.py
-│   ├── postprocess.py
-│   └── sky_mask_updated.png    # Top mask for postprocessing
-│
-├── models/                      # Model files
-│   ├── comfyui/                # ComfyUI models (checkpoints, VAE, etc.)
-│   │   └── sam3/               # SAM3 model
-│   │       └── sam3.pt         # Required for segmentation
-│   └── egoblur_gen2/           # EgoBlur models
-│       ├── ego_blur_face_gen2.jit    # Face detection model (~400MB)
-│       └── ego_blur_lp_gen2.jit      # License plate model (~400MB)
-│
-├── comfyui_data/<container-name>/
-│   ├── input/                  # Staged input images + perspective_mask.png
-│   ├── output/                 # ComfyUI outputs
-│   ├── output-postprocessed/   # Postprocessed outputs
-│   └── output-egoblur/         # Final outputs with blurring
-```
-
----
-
-## Build Instructions (From Source)
-
 ### Step 1: Clone/Copy Project Files
 
 ```bash
@@ -245,6 +215,49 @@ docker logs comfyui-container --tail 50
 ```
 
 **ComfyUI will be accessible at:** http://localhost:8188
+
+---
+
+## Debug: Running ComfyUI Container Only
+
+To start just the ComfyUI container (without running the full pipeline) for debugging or API access:
+
+```bash
+# Using all defaults (./models/comfyui, ./models/egoblur_gen2, ./comfyui_data/comfyui-container)
+docker compose -p comfyui-container up -d
+
+# With custom model path (shared model cache)
+MODELS_ROOT="/path/to/shared-model-cache" docker compose -p comfyui-container up -d
+
+# With custom settings
+MODELS_ROOT="./models" \
+NVIDIA_VISIBLE_DEVICES=0 \
+COMFY_PORT=8188 \
+CONTAINER_NAME=comfyui-container \
+docker compose -p comfyui-container up -d
+```
+
+Default values:
+| Variable | Default |
+|----------|---------|
+| MODELS_COMFYUI_DIR | ./models/comfyui |
+| MODELS_EGOBLUR_DIR | ./models/egoblur_gen2 |
+| COMFYUI_DATA_DIR | ./comfyui_data/comfyui-container |
+| COMFY_PORT | 8188 |
+| CONTAINER_NAME | comfyui-container |
+| NVIDIA_VISIBLE_DEVICES | 0 |
+
+Access ComfyUI at: http://localhost:8188
+
+To view logs:
+```bash
+docker logs -f comfyui-container
+```
+
+To stop:
+```bash
+docker compose -p comfyui-container down
+```
 
 ---
 

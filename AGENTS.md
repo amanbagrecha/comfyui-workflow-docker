@@ -1,5 +1,8 @@
 # AGENTS.md
 
+## General Conventions
+- Always use `tmux` for long-running tasks (like model downloads, Docker pulls, pipeline runs) to prevent blocking the terminal.
+
 ## Purpose
 This repository runs a 3-stage 360 panorama pipeline:
 1. ComfyUI inpainting
@@ -13,25 +16,25 @@ This repository runs a 3-stage 360 panorama pipeline:
 
 ## One-Command Behavior
 `run_full_pipeline.sh` bootstraps setup automatically:
-- Creates required local directories.
 - Ensures `$COMFYUI_DATA_DIR/input/perspective_mask.png` exists (copies from `inpainting-workflow-master/perspective_mask.png` if missing).
 - Checks required models and runs `download-models.sh` if missing (`AUTO_DOWNLOAD_MODELS=1`).
 - Starts the container via `docker compose -p "$CONTAINER_NAME" up -d` if not already up.
 - Preserves existing batch outputs by default (`FORCE_REPROCESS=0`) so reruns can skip/resume; use `FORCE_REPROCESS=1` for a full rerun.
 
-Useful env vars:
-- `SRC` (input dataset folder)
-- `FINAL_OUTPUT_DIR` (where final egoblur outputs are copied)
-- `BATCH_NAME`
-- `POSTPROCESS_WORKERS` (default `1`)
-- `EGOBLUR_WORKERS` (default `3`)
-- `CONTAINER_NAME` (default `comfyui-container`)
-- `COMFYUI_DATA_DIR` (default `$REPO/comfyui_data/$CONTAINER_NAME`)
-- `NVIDIA_VISIBLE_DEVICES` (GPU index passed to compose and container)
-- `COMFY_PORT` (host port for ComfyUI API/UI)
-- `MODELS_ROOT` (shared model cache root)
-- `MODELS_COMFYUI_DIR` / `MODELS_EGOBLUR_DIR` (explicit model path overrides)
-- `FORCE_REPROCESS` (`0` default, set `1` to clear batch dirs and reprocess)
+Useful env vars (with defaults):
+- `SRC` (input dataset folder, no default - must be provided)
+- `FINAL_OUTPUT_DIR` (where final egoblur outputs are copied, no default - optional)
+- `BATCH_NAME` (default: `batch-$(date +%Y%m%d_%H%M%S)`)
+- `POSTPROCESS_WORKERS` (default: `1`)
+- `EGOBLUR_WORKERS` (default: `3`)
+- `CONTAINER_NAME` (default: `comfyui-container`)
+- `COMFYUI_DATA_DIR` (default: `$REPO/comfyui_data/$CONTAINER_NAME`)
+- `NVIDIA_VISIBLE_DEVICES` (default: `0`)
+- `COMFY_PORT` (default: `8188`)
+- `MODELS_ROOT` (default: `./models`)
+- `MODELS_COMFYUI_DIR` (default: `$MODELS_ROOT/comfyui`)
+- `MODELS_EGOBLUR_DIR` (default: `$MODELS_ROOT/egoblur_gen2`)
+- `FORCE_REPROCESS` (default: `0`)
 
 ## What the Full Pipeline Does
 `run_full_pipeline.sh` performs the following stages:
@@ -150,3 +153,40 @@ Count-check rule before/after egoblur:
 - Postprocess output: `comfyui_data/<container-name>/output-postprocessed/<batch-name>`
 - Final egoblur output: `comfyui_data/<container-name>/output-egoblur/<batch-name>`
 - Optional copied final output: `FINAL_OUTPUT_DIR/<batch-name>`
+
+## Debug: Running ComfyUI Container Only
+
+To start just the ComfyUI container (without running the full pipeline) for debugging or API access:
+
+```bash
+# Using all defaults
+docker compose -p comfyui-container up -d
+
+# With custom settings
+MODELS_ROOT="/path/to/shared-model-cache" \
+NVIDIA_VISIBLE_DEVICES=0 \
+COMFY_PORT=8188 \
+docker compose -p comfyui-container up -d
+```
+
+Default values:
+| Variable | Default |
+|----------|---------|
+| MODELS_COMFYUI_DIR | ./models/comfyui |
+| MODELS_EGOBLUR_DIR | ./models/egoblur_gen2 |
+| COMFYUI_DATA_DIR | ./comfyui_data/comfyui-container |
+| COMFY_PORT | 8188 |
+| CONTAINER_NAME | comfyui-container |
+| NVIDIA_VISIBLE_DEVICES | 0 |
+
+Access ComfyUI at: http://localhost:8188
+
+To view logs:
+```bash
+docker logs -f comfyui-container
+```
+
+To stop:
+```bash
+docker compose -p comfyui-container down
+```

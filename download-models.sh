@@ -114,6 +114,12 @@ for _sam3_file in config.json processor_config.json special_tokens_map.json toke
         "[6/9] SAM3 HF config: $_sam3_file"
 done
 
+# 6b. SimpleLama checkpoint (used by postprocess)
+download_model \
+    "https://github.com/enesmsahin/simple-lama-inpainting/releases/download/v0.1.0/big-lama.pt" \
+    "$COMFY_MODELS_DIR/lama/big-lama.pt" \
+    "[6b/9] SimpleLama big-lama checkpoint"
+
 # 7. EgoBlur Face Detection Model
 download_model \
     "https://huggingface.co/aravgarg588/comfyui-container-model/resolve/main/egoblur_gen2/ego_blur_face_gen2.jit" \
@@ -153,6 +159,7 @@ echo "  │       ├── processor_config.json"
 echo "  │       ├── tokenizer.json + tokenizer_config.json"
 echo "  │       ├── vocab.json + merges.txt"
 echo "  │       └── special_tokens_map.json"
+echo "  │   └── lama/big-lama.pt"
 echo "  └── egoblur_gen2/"
 echo "      ├── ego_blur_face_gen2.jit"
 echo "      └── ego_blur_lp_gen2.jit"

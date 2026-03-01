@@ -223,6 +223,7 @@ required_files=(
   "$MODELS_COMFYUI_DIR/vae/qwen_image_vae.safetensors"
   "$MODELS_COMFYUI_DIR/diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors"
   "$MODELS_COMFYUI_DIR/sam3/model.safetensors"
+  "$MODELS_COMFYUI_DIR/lama/big-lama.pt"
   "$MODELS_EGOBLUR_DIR/ego_blur_face_gen2.jit"
   "$MODELS_EGOBLUR_DIR/ego_blur_lp_gen2.jit"
 )
@@ -456,7 +457,7 @@ else
   S_POST=$(date +%s)
   echo "=== STAGE_START postprocess ==="
   if [ "$DOWNSTREAM_MODE" = "inline" ]; then
-    docker exec "$CONTAINER_NAME" python /workspace/inpainting/postprocess.py \
+    docker exec -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt "$CONTAINER_NAME" python /workspace/inpainting/postprocess.py \
       -i /workspace/ComfyUI/output/$BATCH_NAME \
       -o /workspace/output-postprocessed/$BATCH_NAME \
       --top-mask /workspace/inpainting/sky_mask_updated.png \
@@ -471,7 +472,9 @@ else
       --rm
       --name "postprocess-${RUN_ID}"
       --gpus "device=${NVIDIA_VISIBLE_DEVICES:-0}"
+      -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt
       -v "$REPO/inpainting-workflow-master:/workspace/inpainting"
+      -v "$MODELS_COMFYUI_DIR:/workspace/ComfyUI/models:ro"
       -v "$REPO/p2e-local:/workspace/ComfyUI/custom_nodes/p2e"
       -v "$COMFYUI_DATA_DIR/output:/workspace/ComfyUI/output"
       -v "$COMFYUI_DATA_DIR/output-sam3-mask:/workspace/output-sam3-mask"

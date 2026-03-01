@@ -91,10 +91,12 @@ The script will download:
 - **Upscaler**: Real-ESRGAN x2
 - **Diffusion Model**: Qwen Image Edit 2509 (FP8)
 - **SAM3**: Segment Anything Model 3 in HF transformers format (from [public mirror](https://huggingface.co/aravgarg588/comfyui-container-model))
+- **SimpleLama Checkpoint**: `big-lama.pt` for postprocess inpainting
 - **EgoBlur Face**: Face detection model (from [public mirror](https://huggingface.co/aravgarg588/comfyui-container-model))
 - **EgoBlur License Plate**: License plate detection model (from [public mirror](https://huggingface.co/aravgarg588/comfyui-container-model))
 
 **Note:** The script automatically skips models that already exist, so you can safely re-run it. No HuggingFace token required!
+`big-lama.pt` is saved at `models/comfyui/lama/big-lama.pt` and used by postprocess via `LAMA_MODEL`.
 
 ### Step 3: Run Full Pipeline (one command)
 
@@ -115,8 +117,9 @@ Default values:
 | MODELS_EGOBLUR_DIR | ./models/egoblur_gen2 |
 | COMFYUI_DATA_DIR | ./comfyui_data/comfyui-container |
 | CONTAINER_NAME | comfyui-container |
-| POSTPROCESS_WORKERS | 1 |
-| EGOBLUR_WORKERS | 3 |
+| POSTPROCESS_WORKERS | 4 |
+| EGOBLUR_WORKERS | 4 |
+| SAM3_WORKERS | 4 |
 | FORCE_REPROCESS | 0 |
 | AUTO_DOWNLOAD_MODELS | 1 |
 
@@ -134,15 +137,15 @@ Notes:
 - `SRC` is your image folder.
 - Final egoblur outputs are copied to `FINAL_OUTPUT_DIR/<batch-name>/`.
 - Intermediate outputs are stored under `comfyui_data/<container-name>/` by default.
-- Defaults: `POSTPROCESS_WORKERS=1`, `EGOBLUR_WORKERS=3`.
+- Defaults: `POSTPROCESS_WORKERS=4`, `EGOBLUR_WORKERS=4`, `SAM3_WORKERS=4`.
 - Default rerun behavior is skip/resume (`FORCE_REPROCESS=0`); set `FORCE_REPROCESS=1` to clear the batch and rerun from scratch.
 
 Optional overrides:
 
 ```bash
 CONTAINER_NAME="comfyui-container" \
-POSTPROCESS_WORKERS=1 \
-EGOBLUR_WORKERS=3 \
+POSTPROCESS_WORKERS=4 \
+EGOBLUR_WORKERS=4 \
 MODELS_ROOT="/absolute/path/to/shared-model-cache" \
 NVIDIA_VISIBLE_DEVICES=0 \
 COMFY_PORT=8188 \
@@ -328,7 +331,7 @@ docker exec comfyui-container python /workspace/inpainting/comfyui_run.py \
 Run Laplacian sky replacement using SAM3 masks (`carremoved` as source, `newsky` as destination), then apply perspective top-fix and seam cleanup.
 
 ```bash
-docker exec comfyui-container python /workspace/inpainting/postprocess.py \
+docker exec -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt comfyui-container python /workspace/inpainting/postprocess.py \
   -i /workspace/ComfyUI/output/<batch-name> \
   -o /workspace/output-postprocessed/<batch-name> \
   --top-mask /workspace/inpainting/sky_mask_updated.png \
@@ -347,6 +350,8 @@ docker exec comfyui-container python /workspace/inpainting/postprocess.py \
 ```
 
 **Output:** `comfyui_data/<container-name>/output-postprocessed/<batch-name>/*.jpg`
+
+`postprocess.py` uses `LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt` so workers do not race on first-time model download.
 
 ### Stage 4: EgoBlur (Privacy Protection)
 
@@ -488,7 +493,8 @@ docker stop comfyui-g0 comfyui-g1
 # 2) Postprocess only (recommended: -j 6)
 tmux new-session -d -s postproc-g0 "bash -lc '
 docker run --rm --name postproc-g0 --gpus device=0 \
-  -v /root/.cache/torch:/root/.cache/torch \
+  -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt \
+  -v /root/comfyui-workflow-docker/models/comfyui:/workspace/ComfyUI/models:ro \
   -v /root/comfyui-workflow-docker/inpainting-workflow-master:/workspace/inpainting \
   -v /root/comfyui-workflow-docker/p2e-local:/workspace/ComfyUI/custom_nodes/p2e \
   -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g0/output:/workspace/ComfyUI/output \
@@ -509,7 +515,8 @@ docker run --rm --name postproc-g0 --gpus device=0 \
 
 tmux new-session -d -s postproc-g1 "bash -lc '
 docker run --rm --name postproc-g1 --gpus device=1 \
-  -v /root/.cache/torch:/root/.cache/torch \
+  -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt \
+  -v /root/comfyui-workflow-docker/models/comfyui:/workspace/ComfyUI/models:ro \
   -v /root/comfyui-workflow-docker/inpainting-workflow-master:/workspace/inpainting \
   -v /root/comfyui-workflow-docker/p2e-local:/workspace/ComfyUI/custom_nodes/p2e \
   -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g1/output:/workspace/ComfyUI/output \

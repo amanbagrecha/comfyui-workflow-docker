@@ -21,7 +21,7 @@ This repository runs a 5-stage 360 panorama pipeline:
 ## One-Command Behavior
 `run_full_pipeline.sh` bootstraps setup automatically:
 - Ensures `$COMFYUI_DATA_DIR/input/perspective_mask.png` exists (copies from `inpainting-workflow-master/perspective_mask.png` if missing).
-- Checks required models and runs `download-models.sh` if missing (`AUTO_DOWNLOAD_MODELS=1`).
+- Checks required models (including `models/comfyui/lama/big-lama.pt`) and runs `download-models.sh` if missing (`AUTO_DOWNLOAD_MODELS=1`).
 - Starts the container via `docker compose -p "$CONTAINER_NAME" up -d` if not already up.
 - When `DOWNSTREAM_MODE=isolated`, it stops ComfyUI containers before postprocess/egoblur and runs downstream stages in ephemeral `docker run --rm` containers.
 - Preserves existing batch outputs by default (`FORCE_REPROCESS=0`) so reruns can skip/resume; use `FORCE_REPROCESS=1` for a full rerun.
@@ -75,6 +75,7 @@ Useful env vars (with defaults):
      - `*_comfyui_carremoved.jpg` as base/source
      - `*_comfyui_newsky.jpg` as destination sky
    - Reads SAM3 masks from `/workspace/output-sam3-mask/$BATCH_NAME`.
+   - Uses `LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt` for SimpleLama weights.
    - Runs Laplacian replacement with tunables: `--dilation`, `--blur`, `--levels`.
    - Uses top mask `/workspace/inpainting/sky_mask_updated.png`.
    - Writes to `/workspace/output-postprocessed/$BATCH_NAME`.
@@ -173,7 +174,8 @@ docker stop comfyui-g0 comfyui-g1
 
 # Postprocess-only (recommended worker setting: -j 6)
 docker run --rm --name postproc-g0 --gpus device=0 \
-  -v /root/.cache/torch:/root/.cache/torch \
+  -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt \
+  -v /root/comfyui-workflow-docker/models/comfyui:/workspace/ComfyUI/models:ro \
   -v /root/comfyui-workflow-docker/inpainting-workflow-master:/workspace/inpainting \
   -v /root/comfyui-workflow-docker/p2e-local:/workspace/ComfyUI/custom_nodes/p2e \
   -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g0/output:/workspace/ComfyUI/output \

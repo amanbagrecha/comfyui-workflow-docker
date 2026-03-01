@@ -101,11 +101,18 @@ download_model \
     "$COMFY_MODELS_DIR/diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors" \
     "[5/9] Qwen Image Edit Diffusion Model (FP8)"
 
-# 6. SAM3 Model (Segment Anything Model 3)
+# 6. SAM3 HF Transformers format weights + config files
 download_model \
-    "https://huggingface.co/aravgarg588/comfyui-container-model/resolve/main/sam3/sam3.pt" \
-    "$COMFY_MODELS_DIR/sam3/sam3.pt" \
-    "[6/9] SAM3 Segmentation Model"
+    "https://huggingface.co/aravgarg588/comfyui-container-model/resolve/main/sam3/model.safetensors" \
+    "$COMFY_MODELS_DIR/sam3/model.safetensors" \
+    "[6/9] SAM3 Weights (HF transformers format)"
+
+for _sam3_file in config.json processor_config.json special_tokens_map.json tokenizer.json tokenizer_config.json vocab.json merges.txt; do
+    download_model \
+        "https://huggingface.co/aravgarg588/comfyui-container-model/resolve/main/sam3/$_sam3_file" \
+        "$COMFY_MODELS_DIR/sam3/$_sam3_file" \
+        "[6/9] SAM3 HF config: $_sam3_file"
+done
 
 # 7. EgoBlur Face Detection Model
 download_model \
@@ -139,7 +146,13 @@ echo "  │   ├── loras/Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.sa
 echo "  │   ├── upscale_models/RealESRGAN_x2.pth"
 echo "  │   ├── upscale_models/RealESRGAN_x2plus.pth"
 echo "  │   ├── diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors"
-echo "  │   └── sam3/sam3.pt"
+echo "  │   └── sam3/"
+echo "  │       ├── model.safetensors"
+echo "  │       ├── config.json"
+echo "  │       ├── processor_config.json"
+echo "  │       ├── tokenizer.json + tokenizer_config.json"
+echo "  │       ├── vocab.json + merges.txt"
+echo "  │       └── special_tokens_map.json"
 echo "  └── egoblur_gen2/"
 echo "      ├── ego_blur_face_gen2.jit"
 echo "      └── ego_blur_lp_gen2.jit"

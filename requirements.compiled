@@ -162,7 +162,7 @@ hf-xet==1.2.0
 hpack==4.1.0
     # via h2
     # from https://pypi.org/simple
-huggingface-hub==0.36.0
+huggingface-hub==1.5.0
     # via
     #   --override /home/ubuntu/container/override.txt
     #   -r custom_nodes/ComfyUI-Manager/requirements.txt
@@ -513,7 +513,7 @@ trampoline==0.1.2
     #   --override /home/ubuntu/container/override.txt
     #   torchsde
     # from https://pypi.org/simple
-transformers==4.57.3
+transformers==5.2.0
     # via
     #   --override /home/ubuntu/container/override.txt
     #   -r custom_nodes/ComfyUI-Manager/requirements.txt

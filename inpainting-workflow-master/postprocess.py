@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 
-import os
 import multiprocessing as mp
-from pathlib import Path
-from concurrent.futures import ProcessPoolExecutor, as_completed
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import click
-import numpy as np
 import cv2
+import numpy as np
 import torch
+import torch.nn.functional as F
 from pytorch360convert import e2p
 from simple_lama_inpainting import SimpleLama
+
+
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp"}
+ORDERED_IMAGE_EXTS = [".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"]
 
 
 def _load_p2e_and_blend_torch():
@@ -46,38 +51,16 @@ def fix_top_face_black_spots(
     top_mask_u8,
     lama,
     fov_deg=(70, 70),
-    h_deg=180,
-    v_deg=50,
+    h_deg=180.0,
+    v_deg=50.0,
     out_hw=(512, 512),
     feather=10,
     mode="bilinear",
 ):
-    """
-    Fix black spots in the top (sky) area using perspective-based inpainting.
-
-    Args:
-        equi_rgb_u8: Equirectangular RGB image (numpy uint8, HWC)
-        top_mask_u8: Inpainting mask for perspective view (numpy uint8, grayscale)
-        lama: SimpleLama inpainting model instance
-        fov_deg: Field of view (horizontal, vertical) in degrees
-        h_deg: Horizontal rotation (yaw) in degrees
-        v_deg: Vertical rotation (pitch) in degrees - positive looks up
-        out_hw: Output perspective image size (height, width)
-        feather: Feather radius for smooth blending (0 = no feathering)
-        mode: Interpolation mode for e2p ('bilinear' or 'nearest')
-
-    Returns:
-        Equirectangular RGB image with inpainted top area (numpy uint8, HWC)
-    """
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # Step 1: Convert equirectangular to perspective view
-    # e2p expects CHW float [0,1]
     equi_t = torch.from_numpy(equi_rgb_u8).permute(2, 0, 1).float().to(device) / 255.0
 
-    # Extract perspective view
-    # e2p expects CHW input (channels_first=True is default and correct for our equi_t)
-    # e2p returns CHW output when channels_first=True
     persp_t = e2p(
         equi_t,
         fov_deg=fov_deg,
@@ -85,58 +68,49 @@ def fix_top_face_black_spots(
         v_deg=v_deg,
         out_hw=out_hw,
         mode=mode,
-        channels_first=True,  # Input is CHW, output will be CHW
+        channels_first=True,
     )
 
-    # Step 2: Convert to numpy uint8 for LAMA inpainting
-    # persp_t is CHW, need to convert to HWC for LAMA
     persp_u8 = (persp_t.permute(1, 2, 0).detach().cpu().numpy() * 255.0).astype(
         np.uint8
     )
 
-    # Step 3: Apply LAMA inpainting
     persp_fixed_u8 = np.asarray(lama(persp_u8, top_mask_u8), dtype=np.uint8)
 
-    # Step 4: Convert inpainted perspective and original equirectangular to BHWC format for p2e
-    # Add batch dimension and convert to float [0,1]
     persp_fixed_bhwc = (
         torch.from_numpy(persp_fixed_u8).unsqueeze(0).float().to(device) / 255.0
     )
     equi_bhwc = torch.from_numpy(equi_rgb_u8).unsqueeze(0).float().to(device) / 255.0
 
-    # Step 5: Project perspective back to equirectangular with blending
-    # Note: p2e_and_blend_torch uses u_deg (maps to h_deg) and v_deg (negated internally)
     merged, _, _ = p2e_and_blend_torch(
         perspective=persp_fixed_bhwc,
         equi_base=equi_bhwc,
         fov_deg=fov_deg,
-        u_deg=h_deg,  # Horizontal rotation
-        v_deg=v_deg,  # Vertical rotation (will be negated internally)
+        u_deg=h_deg,
+        v_deg=v_deg,
         feather=feather,
         device=device,
     )
 
-    # Step 6: Convert back to numpy uint8 HWC
-    # merged is BHWC, squeeze batch dimension
     return (merged.squeeze(0).detach().cpu().numpy() * 255.0).astype(np.uint8)
 
 
 def fix_panorama_seam(
     equi_rgb_u8, lama, seam_width=40, pad=128, feather=64, mask_sigma=3.0
 ):
-    H, W, _ = equi_rgb_u8.shape
+    h, w, _ = equi_rgb_u8.shape
 
-    rolled = np.roll(equi_rgb_u8, shift=W // 2, axis=1)
+    rolled = np.roll(equi_rgb_u8, shift=w // 2, axis=1)
 
-    cx = W // 2
+    cx = w // 2
     x0 = max(0, cx - (seam_width + pad))
-    x1 = min(W, cx + (seam_width + pad))
+    x1 = min(w, cx + (seam_width + pad))
 
     crop = rolled[:, x0:x1, :].copy()
     crop_w = crop.shape[1]
     scx = crop_w // 2
 
-    mask = np.zeros((H, crop_w), dtype=np.uint8)
+    mask = np.zeros((h, crop_w), dtype=np.uint8)
     mask[:, max(0, scx - seam_width) : min(crop_w, scx + seam_width)] = 255
     if mask_sigma > 0:
         mask = cv2.GaussianBlur(mask, (0, 0), float(mask_sigma))
@@ -149,45 +123,394 @@ def fix_panorama_seam(
             np.clip(x / feather, 0.0, 1.0),
             np.clip((crop_w - 1 - x) / feather, 0.0, 1.0),
         )
-        alpha = np.repeat(a[None, :, None], H, axis=0)
+        alpha = np.repeat(a[None, :, None], h, axis=0)
     else:
-        alpha = np.ones((H, crop_w, 1), dtype=np.float32)
+        alpha = np.ones((h, crop_w, 1), dtype=np.float32)
 
     blended = (
         alpha * crop_fixed.astype(np.float32) + (1.0 - alpha) * crop.astype(np.float32)
     ).astype(np.uint8)
     rolled[:, x0:x1, :] = blended
 
-    return np.roll(rolled, shift=-(W // 2), axis=1)
+    return np.roll(rolled, shift=-(w // 2), axis=1)
+
+
+def _pil_tensor_from_rgb(rgb_u8: np.ndarray, device: str, dtype: torch.dtype):
+    return (
+        torch.from_numpy(rgb_u8)
+        .permute(2, 0, 1)
+        .unsqueeze(0)
+        .to(device=device, dtype=dtype)
+        / 255.0
+    )
+
+
+def _mask_tensor_from_u8(mask_u8: np.ndarray, device: str, dtype: torch.dtype):
+    return (
+        torch.from_numpy(mask_u8)
+        .unsqueeze(0)
+        .unsqueeze(0)
+        .to(device=device, dtype=dtype)
+        / 255.0
+    )
+
+
+def gaussian_blur_t(t: torch.Tensor, radius: float):
+    if radius < 0.5:
+        return t
+    k = int(radius) * 2 + 1
+    sigma = float(radius)
+    ax = torch.arange(k, dtype=torch.float32, device=t.device) - (k - 1) / 2.0
+    kernel_1d = torch.exp(-0.5 * (ax / sigma) ** 2)
+    kernel_1d = kernel_1d / kernel_1d.sum()
+    kernel_1d = kernel_1d.to(dtype=t.dtype)
+    c = t.shape[1]
+    kh = kernel_1d.view(1, 1, k, 1).expand(c, 1, k, 1)
+    kw = kernel_1d.view(1, 1, 1, k).expand(c, 1, 1, k)
+    p = k // 2
+    out = F.conv2d(F.pad(t, (0, 0, p, p), mode="reflect"), kh, groups=c)
+    out = F.conv2d(F.pad(out, (p, p, 0, 0), mode="reflect"), kw, groups=c)
+    return out
+
+
+def dilate_t(mask: torch.Tensor, iterations: int):
+    for _ in range(iterations):
+        mask = F.max_pool2d(mask, kernel_size=3, stride=1, padding=1)
+    return mask
+
+
+def downsample(t: torch.Tensor):
+    return F.interpolate(t, scale_factor=0.5, mode="bilinear", align_corners=False)
+
+
+def upsample(t: torch.Tensor, size_hw: Tuple[int, int]):
+    return F.interpolate(t, size=size_hw, mode="bilinear", align_corners=False)
+
+
+def build_gauss_pyr(t: torch.Tensor, levels: int):
+    pyr = [t]
+    for _ in range(levels):
+        h, w = pyr[-1].shape[2:]
+        if h <= 1 or w <= 1:
+            break
+        blurred = gaussian_blur_t(pyr[-1], radius=2)
+        pyr.append(downsample(blurred))
+    return pyr
+
+
+def build_lap_pyr(gpyr: List[torch.Tensor]):
+    lap = []
+    for i in range(len(gpyr) - 1):
+        h, w = gpyr[i].shape[2:]
+        up = upsample(gpyr[i + 1], (h, w))
+        lap.append(gpyr[i] - up)
+    lap.append(gpyr[-1])
+    return lap
+
+
+def collapse_lap_pyr(lp: List[torch.Tensor]):
+    result = lp[-1]
+    for i in range(len(lp) - 2, -1, -1):
+        h, w = lp[i].shape[2:]
+        result = upsample(result, (h, w)) + lp[i]
+    return result
+
+
+def align_mask_to_image(mask_u8: np.ndarray, target_hw: Tuple[int, int]):
+    th, tw = target_hw
+    mh, mw = mask_u8.shape[:2]
+    if mh <= 0 or mw <= 0:
+        raise ValueError("Mask has invalid shape")
+
+    mr = float(mw) / float(mh)
+    tr = float(tw) / float(th)
+
+    aligned = mask_u8
+    if abs(mr - tr) > 1e-6:
+        if mr > tr:
+            nw = int(round(mh * tr))
+            x0 = max(0, (mw - nw) // 2)
+            aligned = aligned[:, x0 : x0 + nw]
+        else:
+            nh = int(round(mw / tr))
+            y0 = max(0, (mh - nh) // 2)
+            aligned = aligned[y0 : y0 + nh, :]
+
+    return cv2.resize(aligned, (tw, th), interpolation=cv2.INTER_LANCZOS4)
+
+
+def orient_mask_to_sky(mask_u8: np.ndarray):
+    h, _ = mask_u8.shape
+    top_band = mask_u8[: max(1, h // 3), :]
+    bot_band = mask_u8[max(0, 2 * h // 3) :, :]
+    top_mean = float(np.mean(top_band))
+    bot_mean = float(np.mean(bot_band))
+    if top_mean < bot_mean:
+        return 255 - mask_u8, True
+    return mask_u8, False
+
+
+def threshold_mask(mask_u8: np.ndarray, threshold: int = 127):
+    return (mask_u8 >= threshold).astype(np.uint8) * 255
+
+
+def compute_mask_bbox(mask_u8: np.ndarray, pad: int):
+    ys, xs = np.where(mask_u8 > 0)
+    if ys.size == 0 or xs.size == 0:
+        return None
+
+    h, w = mask_u8.shape[:2]
+    y0 = max(0, int(ys.min()) - pad)
+    y1 = min(h, int(ys.max()) + pad + 1)
+    x0 = max(0, int(xs.min()) - pad)
+    x1 = min(w, int(xs.max()) + pad + 1)
+    if y1 <= y0 or x1 <= x0:
+        return None
+    return y0, y1, x0, x1
+
+
+def laplacian_sky_replace(
+    base_rgb_u8: np.ndarray,
+    sky_rgb_u8: np.ndarray,
+    sam3_mask_u8: np.ndarray,
+    dilation: int,
+    blur_radius: int,
+    levels: int,
+    roi_pad: int,
+    use_fp16: bool,
+):
+    if base_rgb_u8.shape[:2] != sky_rgb_u8.shape[:2]:
+        h, w = base_rgb_u8.shape[:2]
+        sky_rgb_u8 = cv2.resize(sky_rgb_u8, (w, h), interpolation=cv2.INTER_LANCZOS4)
+
+    h, w = base_rgb_u8.shape[:2]
+    mask_aligned = align_mask_to_image(sam3_mask_u8, (h, w))
+    mask_oriented, _ = orient_mask_to_sky(mask_aligned)
+    mask_bin = threshold_mask(mask_oriented, threshold=127)
+
+    dynamic_pad = max(roi_pad, int(2 * blur_radius + 2 * dilation + 16))
+    bbox = compute_mask_bbox(mask_bin, pad=max(0, dynamic_pad))
+    if bbox is None:
+        return base_rgb_u8
+
+    y0, y1, x0, x1 = bbox
+    roi_area = (y1 - y0) * (x1 - x0)
+    if roi_area < h * w:
+        base_work = base_rgb_u8[y0:y1, x0:x1, :]
+        sky_work = sky_rgb_u8[y0:y1, x0:x1, :]
+        mask_work = mask_bin[y0:y1, x0:x1]
+    else:
+        base_work = base_rgb_u8
+        sky_work = sky_rgb_u8
+        mask_work = mask_bin
+        y0, x0 = 0, 0
+        y1, x1 = h, w
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.float16 if (use_fp16 and device == "cuda") else torch.float32
+    base_t = _pil_tensor_from_rgb(base_work, device, dtype)
+    sky_t = _pil_tensor_from_rgb(sky_work, device, dtype)
+    mask_t = _mask_tensor_from_u8(mask_work, device, dtype)
+
+    blend_mask = dilate_t(mask_t, max(0, int(dilation)))
+    blend_mask = gaussian_blur_t(blend_mask, radius=max(0, int(blur_radius))).clamp(
+        0, 1
+    )
+
+    gp_base = build_gauss_pyr(base_t, max(0, int(levels)))
+    gp_sky = build_gauss_pyr(sky_t, max(0, int(levels)))
+    gp_mask = build_gauss_pyr(blend_mask, max(0, int(levels)))
+
+    min_len = min(len(gp_base), len(gp_sky), len(gp_mask))
+    gp_base = gp_base[:min_len]
+    gp_sky = gp_sky[:min_len]
+    gp_mask = gp_mask[:min_len]
+
+    lp_base = build_lap_pyr(gp_base)
+    lp_sky = build_lap_pyr(gp_sky)
+
+    lp_blend = []
+    for lb, ls, gm in zip(lp_base, lp_sky, gp_mask):
+        lp_blend.append(ls * gm + lb * (1.0 - gm))
+
+    result_t = collapse_lap_pyr(lp_blend).clamp(0, 1)
+    result_roi = (
+        result_t.squeeze(0).permute(1, 2, 0).detach().cpu().numpy() * 255.0
+    ).astype(np.uint8)
+    if y0 == 0 and x0 == 0 and y1 == h and x1 == w:
+        return result_roi
+
+    out = base_rgb_u8.copy()
+    out[y0:y1, x0:x1, :] = result_roi
+    return out
 
 
 def read_rgb(path: Path):
     bgr = cv2.imread(str(path), cv2.IMREAD_COLOR)
+    if bgr is None:
+        raise FileNotFoundError(f"Failed to read image: {path}")
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB).astype(np.uint8)
 
 
 def write_rgb(path: Path, rgb_u8: np.ndarray):
     path.parent.mkdir(parents=True, exist_ok=True)
     bgr = cv2.cvtColor(rgb_u8, cv2.COLOR_RGB2BGR)
-    cv2.imwrite(str(path), bgr, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    params = []
+    if path.suffix.lower() in {".jpg", ".jpeg"}:
+        params = [cv2.IMWRITE_JPEG_QUALITY, 90]
+    cv2.imwrite(str(path), bgr, params)
 
 
 def read_mask(path: Path):
-    return cv2.imread(str(path), cv2.IMREAD_GRAYSCALE).astype(np.uint8)
+    mask = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    if mask is None:
+        raise FileNotFoundError(f"Failed to read mask: {path}")
+    return mask.astype(np.uint8)
 
 
-def normalize_mask(mask_u8: np.ndarray, size_hw):
+def normalize_mask(mask_u8: np.ndarray, size_hw: Tuple[int, int]):
     h, w = size_hw
     if mask_u8.shape[:2] != (h, w):
         mask_u8 = cv2.resize(mask_u8, (w, h), interpolation=cv2.INTER_NEAREST)
     return (mask_u8 > 0).astype(np.uint8) * 255
 
 
+def _iter_input_files(input_path: Path, pattern: str, recursive: bool):
+    if input_path.is_file():
+        return [input_path], input_path.parent
+
+    files = sorted(input_path.rglob(pattern) if recursive else input_path.glob(pattern))
+    files = [p for p in files if p.is_file() and p.suffix.lower() in IMAGE_EXTS]
+    return files, input_path
+
+
+def _find_sibling_image(parent: Path, stem: str, preferred_ext: str):
+    preferred = parent / f"{stem}{preferred_ext}"
+    if preferred.exists():
+        return preferred
+    for ext in ORDERED_IMAGE_EXTS:
+        cand = parent / f"{stem}{ext}"
+        if cand.exists():
+            return cand
+    return None
+
+
+def _build_mask_index(mask_dir: Path):
+    index = {}
+    collisions = set()
+    for p in mask_dir.rglob("*"):
+        if not p.is_file() or p.suffix.lower() not in IMAGE_EXTS:
+            continue
+        stem = p.stem
+        if stem in index and index[stem] != p:
+            collisions.add(stem)
+        else:
+            index[stem] = p
+    for stem in collisions:
+        index[stem] = None
+    return index
+
+
+def _resolve_mask_path(
+    mask_dir: Path,
+    rel_dir: Path,
+    base_stem: str,
+    mask_index: Dict[str, Optional[Path]],
+):
+    rel_png = mask_dir / rel_dir / f"{base_stem}.png"
+    if rel_png.exists():
+        return rel_png
+
+    root_png = mask_dir / f"{base_stem}.png"
+    if root_png.exists():
+        return root_png
+
+    if base_stem in mask_index:
+        return mask_index[base_stem]
+    return None
+
+
+def _build_legacy_jobs(
+    in_files: List[Path],
+    in_root: Path,
+    output_dir: Path,
+    skip_existing: bool,
+):
+    jobs = []
+    for p in in_files:
+        rel = p.relative_to(in_root)
+        out_p = output_dir / rel
+        if skip_existing and out_p.exists():
+            continue
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        jobs.append((str(p), str(out_p), None, None))
+    return jobs
+
+
+def _build_laplacian_jobs(
+    in_files: List[Path],
+    in_root: Path,
+    output_dir: Path,
+    mask_dir: Path,
+    skip_existing: bool,
+    carremoved_suffix: str,
+    newsky_suffix: str,
+):
+    mask_index = _build_mask_index(mask_dir)
+    jobs = []
+    errors = []
+    matched_sources = 0
+
+    for p in in_files:
+        stem = p.stem
+        if not stem.endswith(carremoved_suffix):
+            continue
+
+        base_stem = stem[: -len(carremoved_suffix)]
+        if not base_stem:
+            continue
+        matched_sources += 1
+
+        rel = p.relative_to(in_root)
+        out_p = output_dir / rel.with_name(f"{base_stem}{p.suffix.lower()}")
+        if skip_existing and out_p.exists():
+            continue
+
+        sky_stem = f"{base_stem}{newsky_suffix}"
+        sky_path = _find_sibling_image(p.parent, sky_stem, p.suffix.lower())
+        if sky_path is None:
+            errors.append(f"Missing newsky pair for {p.name}")
+            continue
+
+        rel_dir = rel.parent
+        mask_path = _resolve_mask_path(mask_dir, rel_dir, base_stem, mask_index)
+        if mask_path is None:
+            errors.append(f"Missing SAM3 mask for base '{base_stem}'")
+            continue
+
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        jobs.append((str(p), str(out_p), str(sky_path), str(mask_path)))
+
+    if errors:
+        shown = "\n".join(errors[:20])
+        more = len(errors) - min(len(errors), 20)
+        if more > 0:
+            shown += f"\n... and {more} more"
+        raise click.ClickException(shown)
+
+    if not jobs and matched_sources == 0:
+        raise click.ClickException(
+            f"No '{carremoved_suffix}' files found in input for Laplacian mode"
+        )
+
+    return jobs
+
+
 _LAMA = None
 _TOP_MASK = None
 
 
-def worker_init(top_mask_path: str, out_hw: tuple):
+def worker_init(top_mask_path: str, out_hw: Tuple[int, int]):
     global _LAMA, _TOP_MASK
     _LAMA = SimpleLama()
     h, w = out_hw
@@ -197,19 +520,40 @@ def worker_init(top_mask_path: str, out_hw: tuple):
 def process_one(
     in_path: str,
     out_path: str,
-    fov_deg: tuple,
+    sky_path: Optional[str],
+    sam3_mask_path: Optional[str],
+    fov_deg: Tuple[int, int],
     h_deg: float,
     v_deg: float,
-    out_hw: tuple,
+    out_hw: Tuple[int, int],
     top_feather: int,
     seam_width: int,
     pad: int,
     seam_feather: int,
     mask_sigma: float,
+    dilation: int,
+    blur_radius: int,
+    levels: int,
+    roi_pad: int,
+    laplacian_fp16: bool,
 ):
     global _LAMA, _TOP_MASK
 
     img = read_rgb(Path(in_path))
+
+    if sky_path and sam3_mask_path:
+        sky = read_rgb(Path(sky_path))
+        sam3_mask = read_mask(Path(sam3_mask_path))
+        img = laplacian_sky_replace(
+            base_rgb_u8=img,
+            sky_rgb_u8=sky,
+            sam3_mask_u8=sam3_mask,
+            dilation=dilation,
+            blur_radius=blur_radius,
+            levels=levels,
+            roi_pad=roi_pad,
+            use_fp16=laplacian_fp16,
+        )
 
     img = fix_top_face_black_spots(
         img,
@@ -221,6 +565,7 @@ def process_one(
         out_hw=out_hw,
         feather=top_feather,
     )
+
     img = fix_panorama_seam(
         img,
         _LAMA,
@@ -231,6 +576,7 @@ def process_one(
     )
 
     write_rgb(Path(out_path), img)
+    return out_path
 
 
 @click.command(context_settings=dict(help_option_names=["-h", "--help"]))
@@ -245,6 +591,40 @@ def process_one(
     "-o", "--output", "output_dir", required=True, type=click.Path(path_type=Path)
 )
 @click.option("--top-mask", required=True, type=click.Path(path_type=Path, exists=True))
+@click.option(
+    "--sam3-mask-dir",
+    default=None,
+    type=click.Path(path_type=Path, exists=True, file_okay=False),
+    help="SAM3 mask directory. Enables Laplacian sky replacement mode.",
+)
+@click.option(
+    "--carremoved-suffix",
+    default="_comfyui_carremoved",
+    show_default=True,
+    help="Suffix used to identify source images from Comfy outputs",
+)
+@click.option(
+    "--newsky-suffix",
+    default="_comfyui_newsky",
+    show_default=True,
+    help="Suffix used to identify sky images from Comfy outputs",
+)
+@click.option("--dilation", default=1, show_default=True, type=int)
+@click.option("--blur", "blur_radius", default=10, show_default=True, type=int)
+@click.option("--levels", default=7, show_default=True, type=int)
+@click.option(
+    "--laplacian-roi-pad",
+    default=96,
+    show_default=True,
+    type=int,
+    help="Extra ROI padding (pixels) around SAM3 mask before Laplacian blend",
+)
+@click.option(
+    "--laplacian-fp16/--no-laplacian-fp16",
+    default=True,
+    show_default=True,
+    help="Use float16 for Laplacian blend tensors on CUDA",
+)
 @click.option("--pattern", default="*.jpg", show_default=True)
 @click.option("--recursive/--no-recursive", default=True, show_default=True)
 @click.option("--skip-existing/--no-skip-existing", default=True, show_default=True)
@@ -308,6 +688,14 @@ def main(
     input_path: Path,
     output_dir: Path,
     top_mask: Path,
+    sam3_mask_dir: Optional[Path],
+    carremoved_suffix: str,
+    newsky_suffix: str,
+    dilation: int,
+    blur_radius: int,
+    levels: int,
+    laplacian_roi_pad: int,
+    laplacian_fp16: bool,
     pattern: str,
     recursive: bool,
     skip_existing: bool,
@@ -326,75 +714,138 @@ def main(
 ):
     t0 = time.perf_counter()
 
-    if input_path.is_file():
-        in_files = [input_path]
-        in_root = input_path.parent
+    if workers < 1:
+        raise click.ClickException("workers must be >= 1")
+    if dilation < 0:
+        raise click.ClickException("dilation must be >= 0")
+    if blur_radius < 0:
+        raise click.ClickException("blur must be >= 0")
+    if levels < 0:
+        raise click.ClickException("levels must be >= 0")
+    if laplacian_roi_pad < 0:
+        raise click.ClickException("laplacian-roi-pad must be >= 0")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    in_files, in_root = _iter_input_files(input_path, pattern, recursive)
+    if not in_files:
+        raise click.ClickException(f"No images found under: {input_path}")
+
+    if sam3_mask_dir is not None:
+        mode = "laplacian"
+        jobs = _build_laplacian_jobs(
+            in_files=in_files,
+            in_root=in_root,
+            output_dir=output_dir,
+            mask_dir=sam3_mask_dir,
+            skip_existing=skip_existing,
+            carremoved_suffix=carremoved_suffix,
+            newsky_suffix=newsky_suffix,
+        )
     else:
-        in_root = input_path
-        in_files = sorted(
-            input_path.rglob(pattern) if recursive else input_path.glob(pattern)
+        mode = "legacy"
+        jobs = _build_legacy_jobs(
+            in_files=in_files,
+            in_root=in_root,
+            output_dir=output_dir,
+            skip_existing=skip_existing,
         )
 
-    pairs = []
-    for p in in_files:
-        rel = p.relative_to(in_root)
-        out_p = output_dir / rel
-        if skip_existing and out_p.exists():
-            continue
-        out_p.parent.mkdir(parents=True, exist_ok=True)
-        pairs.append((str(p), str(out_p)))
-
-    if not pairs:
+    if not jobs:
+        click.echo("No work to do (all outputs already exist).")
         return
+
+    click.echo(
+        f"postprocess_mode={mode} input_count={len(in_files)} pending={len(jobs)} workers={workers}"
+    )
+    if mode == "laplacian":
+        click.echo(
+            f"laplacian: dilation={dilation} blur={blur_radius} levels={levels} "
+            f"roi_pad={laplacian_roi_pad} fp16={laplacian_fp16} "
+            f"carremoved_suffix='{carremoved_suffix}' newsky_suffix='{newsky_suffix}'"
+        )
+
+    if workers > 1 and torch.cuda.is_available():
+        click.echo(
+            "WARNING: workers>1 on CUDA can increase VRAM pressure in postprocess",
+            err=True,
+        )
+
+    failures = []
 
     if workers == 1:
         worker_init(str(top_mask), (persp_h, persp_w))
-        for in_p, out_p in pairs:
-            process_one(
-                in_p,
-                out_p,
-                (fov_w, fov_h),
-                h_deg,
-                v_deg,
-                (persp_h, persp_w),
-                top_feather,
-                seam_width,
-                pad,
-                seam_feather,
-                mask_sigma,
-            )
-        print(f"total: {time.perf_counter() - t0:.2f}s", flush=True)
-        return
+        for in_p, out_p, sky_p, sam3_p in jobs:
+            try:
+                process_one(
+                    in_p,
+                    out_p,
+                    sky_p,
+                    sam3_p,
+                    (fov_w, fov_h),
+                    h_deg,
+                    v_deg,
+                    (persp_h, persp_w),
+                    top_feather,
+                    seam_width,
+                    pad,
+                    seam_feather,
+                    mask_sigma,
+                    dilation,
+                    blur_radius,
+                    levels,
+                    laplacian_roi_pad,
+                    laplacian_fp16,
+                )
+                click.echo(f"OK   {Path(in_p).name} -> {Path(out_p).name}")
+            except Exception as exc:
+                msg = f"FAIL {Path(in_p).name}: {exc}"
+                click.echo(msg, err=True)
+                failures.append(msg)
+    else:
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=worker_init,
+            initargs=(str(top_mask), (persp_h, persp_w)),
+            mp_context=mp.get_context("spawn"),
+        ) as ex:
+            futs = {
+                ex.submit(
+                    process_one,
+                    in_p,
+                    out_p,
+                    sky_p,
+                    sam3_p,
+                    (fov_w, fov_h),
+                    h_deg,
+                    v_deg,
+                    (persp_h, persp_w),
+                    top_feather,
+                    seam_width,
+                    pad,
+                    seam_feather,
+                    mask_sigma,
+                    dilation,
+                    blur_radius,
+                    levels,
+                    laplacian_roi_pad,
+                    laplacian_fp16,
+                ): (in_p, out_p)
+                for in_p, out_p, sky_p, sam3_p in jobs
+            }
+            for fut in as_completed(futs):
+                in_p, out_p = futs[fut]
+                try:
+                    fut.result()
+                    click.echo(f"OK   {Path(in_p).name} -> {Path(out_p).name}")
+                except Exception as exc:
+                    msg = f"FAIL {Path(in_p).name}: {exc}"
+                    click.echo(msg, err=True)
+                    failures.append(msg)
 
-        mp_ctx = mp.get_context("spawn")
-
-    with ProcessPoolExecutor(
-        max_workers=workers,
-        initializer=worker_init,
-        initargs=(str(top_mask), (persp_h, persp_w)),
-        mp_context=mp.get_context("spawn"),
-    ) as ex:
-        futs = [
-            ex.submit(
-                process_one,
-                in_p,
-                out_p,
-                (fov_w, fov_h),
-                h_deg,
-                v_deg,
-                (persp_h, persp_w),
-                top_feather,
-                seam_width,
-                pad,
-                seam_feather,
-                mask_sigma,
-            )
-            for in_p, out_p in pairs
-        ]
-        for _ in as_completed(futs):
-            pass
-
-    print(f"total: {time.perf_counter() - t0:.2f}s", flush=True)
+    click.echo(f"total: {time.perf_counter() - t0:.2f}s")
+    if failures:
+        raise click.ClickException(f"{len(failures)} image(s) failed in postprocess")
 
 
 if __name__ == "__main__":

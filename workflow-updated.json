@@ -1,109 +1,4 @@
 {
-  "1": {
-    "inputs": {
-      "model_path": "models/sam3/sam3.pt"
-    },
-    "class_type": "LoadSAM3Model",
-    "_meta": {
-      "title": "(down)Load SAM3 Model"
-    }
-  },
-  "2": {
-    "inputs": {
-      "target_width": 1024,
-      "target_height": 1024,
-      "padding_color": "black",
-      "interpolation": "area",
-      "image": [
-        "48",
-        0
-      ]
-    },
-    "class_type": "ResizeAndPadImage",
-    "_meta": {
-      "title": "ResizeAndPadImage"
-    }
-  },
-  "3": {
-    "inputs": {
-      "masks": [
-        "5",
-        0
-      ]
-    },
-    "class_type": "Masks Combine Batch",
-    "_meta": {
-      "title": "Masks Combine Batch"
-    }
-  },
-  "4": {
-    "inputs": {
-      "target_width": 1200,
-      "target_height": 1024,
-      "padding_color": "black",
-      "interpolation": "area",
-      "image": [
-        "2",
-        0
-      ]
-    },
-    "class_type": "ResizeAndPadImage",
-    "_meta": {
-      "title": "ResizeAndPadImage"
-    }
-  },
-  "5": {
-    "inputs": {
-      "confidence_threshold": 0.5,
-      "text_prompt": "sky",
-      "max_detections": -1,
-      "offload_model": false,
-      "sam3_model": [
-        "1",
-        0
-      ],
-      "image": [
-        "4",
-        0
-      ]
-    },
-    "class_type": "SAM3Grounding",
-    "_meta": {
-      "title": "SAM3 Text Segmentation"
-    }
-  },
-  "6": {
-    "inputs": {
-      "confidence_threshold": 0.4,
-      "text_prompt": "sun glare",
-      "max_detections": -1,
-      "offload_model": false,
-      "sam3_model": [
-        "1",
-        0
-      ],
-      "image": [
-        "4",
-        0
-      ]
-    },
-    "class_type": "SAM3Grounding",
-    "_meta": {
-      "title": "SAM3 Text Segmentation"
-    }
-  },
-  "7": {
-    "inputs": {
-      "masks": [
-        "6",
-        0
-      ]
-    },
-    "class_type": "Masks Combine Batch",
-    "_meta": {
-      "title": "Masks Combine Batch"
-    }
-  },
   "8": {
     "inputs": {
       "conditioning": [
@@ -200,22 +95,6 @@
       "title": "VAE Encode"
     }
   },
-  "15": {
-    "inputs": {
-      "mask_a": [
-        "7",
-        0
-      ],
-      "mask_b": [
-        "3",
-        0
-      ]
-    },
-    "class_type": "Masks Combine Regions",
-    "_meta": {
-      "title": "Masks Combine Regions"
-    }
-  },
   "16": {
     "inputs": {
       "x": 0,
@@ -241,7 +120,7 @@
   },
   "17": {
     "inputs": {
-      "seed": 647800454776098,
+      "seed": 897264075406999,
       "steps": 4,
       "cfg": 1,
       "sampler_name": "euler",
@@ -272,7 +151,7 @@
   "18": {
     "inputs": {
       "masks": [
-        "21",
+        "61",
         0
       ]
     },
@@ -311,22 +190,6 @@
       "title": "TextEncodeQwenImageEditPlus"
     }
   },
-  "21": {
-    "inputs": {
-      "x": 88,
-      "y": 0,
-      "width": 1024,
-      "height": 1024,
-      "mask": [
-        "15",
-        0
-      ]
-    },
-    "class_type": "CropMask",
-    "_meta": {
-      "title": "CropMask"
-    }
-  },
   "22": {
     "inputs": {
       "amount": 10,
@@ -338,7 +201,7 @@
     },
     "class_type": "MaskBlur+",
     "_meta": {
-      "title": "🔧 Mask Blur"
+      "title": "\ud83d\udd27 Mask Blur"
     }
   },
   "23": {
@@ -532,7 +395,7 @@
   },
   "37": {
     "inputs": {
-      "seed": 261938971942784,
+      "seed": 806163024690677,
       "steps": 4,
       "cfg": 1,
       "sampler_name": "euler",
@@ -600,30 +463,6 @@
       "title": "TextEncodeQwenImageEditPlus"
     }
   },
-  "40": {
-    "inputs": {
-      "images": [
-        "16",
-        0
-      ]
-    },
-    "class_type": "PreviewImage",
-    "_meta": {
-      "title": "Preview Image"
-    }
-  },
-  "41": {
-    "inputs": {
-      "images": [
-        "38",
-        0
-      ]
-    },
-    "class_type": "PreviewImage",
-    "_meta": {
-      "title": "Preview Image"
-    }
-  },
   "42": {
     "inputs": {
       "conditioning": [
@@ -656,18 +495,6 @@
       "title": "VAE Encode"
     }
   },
-  "44": {
-    "inputs": {
-      "images": [
-        "45",
-        0
-      ]
-    },
-    "class_type": "PreviewImage",
-    "_meta": {
-      "title": "Preview Image"
-    }
-  },
   "45": {
     "inputs": {
       "fov_w": 140,
@@ -689,64 +516,15 @@
       "title": "Perspective to Equirectangular + Blend"
     }
   },
-  "46": {
-    "inputs": {
-      "mask": [
-        "47",
-        0
-      ]
-    },
-    "class_type": "InvertMask",
-    "_meta": {
-      "title": "InvertMask"
-    }
-  },
-  "47": {
-    "inputs": {
-      "x": 0,
-      "y": 256,
-      "width": 1024,
-      "height": 512,
-      "mask": [
-        "22",
-        0
-      ]
-    },
-    "class_type": "CropMask",
-    "_meta": {
-      "title": "CropMask"
-    }
-  },
   "48": {
     "inputs": {
-      "image": "438806732465_793195856924_ladybug_Panoramic_001608.jpg"
+      "image_path": "/workspace/ComfyUI/input/example_image.jpg",
+      "RGBA": "false",
+      "filename_text_extension": "true"
     },
-    "class_type": "LoadImage",
+    "class_type": "Image Load",
     "_meta": {
-      "title": "Load Image"
-    }
-  },
-  "49": {
-    "inputs": {
-      "x": 0,
-      "y": 0,
-      "resize_source": false,
-      "destination": [
-        "53",
-        0
-      ],
-      "source": [
-        "45",
-        0
-      ],
-      "mask": [
-        "46",
-        0
-      ]
-    },
-    "class_type": "ImageCompositeMasked",
-    "_meta": {
-      "title": "ImageCompositeMasked"
+      "title": "Image Load Panorama"
     }
   },
   "50": {
@@ -805,13 +583,13 @@
     },
     "class_type": "ImageResize+",
     "_meta": {
-      "title": "🔧 Image Resize"
+      "title": "\ud83d\udd27 Image Resize"
     }
   },
   "54": {
     "inputs": {
       "output_path": "test-1",
-      "filename_prefix": "input_image1",
+      "filename_prefix": "comfyui_newsky",
       "filename_delimiter": "_",
       "filename_number_padding": 4,
       "filename_number_start": "false",
@@ -826,13 +604,76 @@
       "embed_workflow": "true",
       "show_previews": "false",
       "images": [
-        "49",
+        "53",
         0
       ]
     },
     "class_type": "Image Save",
     "_meta": {
       "title": "Image Save"
+    }
+  },
+  "59": {
+    "inputs": {
+      "output_path": "test-2",
+      "filename_prefix": "comfyui_carremoved",
+      "filename_delimiter": "_",
+      "filename_number_padding": 4,
+      "filename_number_start": "false",
+      "extension": "jpg",
+      "dpi": 300,
+      "quality": 80,
+      "optimize_image": "true",
+      "lossless_webp": "false",
+      "overwrite_mode": "false",
+      "show_history": "false",
+      "show_history_by_prefix": "true",
+      "embed_workflow": "true",
+      "show_previews": "true",
+      "images": [
+        "45",
+        0
+      ]
+    },
+    "class_type": "Image Save",
+    "_meta": {
+      "title": "Image Save"
+    }
+  },
+  "60": {
+    "inputs": {
+      "image_path": "/workspace/output-sam3-mask/example/example_image.png",
+      "RGBA": "false",
+      "filename_text_extension": "true"
+    },
+    "class_type": "Image Load",
+    "_meta": {
+      "title": "Image Load SAM3 Mask"
+    }
+  },
+  "86": {
+    "inputs": {
+      "images": [
+        "16",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Image"
+    }
+  },
+  "61": {
+    "inputs": {
+      "channel": "red",
+      "image": [
+        "60",
+        0
+      ]
+    },
+    "class_type": "ImageToMask",
+    "_meta": {
+      "title": "SAM3 Mask To Mask"
     }
   }
 }

@@ -90,7 +90,7 @@ The script will download:
 - **LoRA**: Qwen Image Edit Lightning (4-step)
 - **Upscaler**: Real-ESRGAN x2
 - **Diffusion Model**: Qwen Image Edit 2509 (FP8)
-- **SAM3**: Segment Anything Model 3 (from [public mirror](https://huggingface.co/aravgarg588/comfyui-container-model))
+- **SAM3**: Segment Anything Model 3 in HF transformers format (from [public mirror](https://huggingface.co/aravgarg588/comfyui-container-model))
 - **EgoBlur Face**: Face detection model (from [public mirror](https://huggingface.co/aravgarg588/comfyui-container-model))
 - **EgoBlur License Plate**: License plate detection model (from [public mirror](https://huggingface.co/aravgarg588/comfyui-container-model))
 
@@ -162,6 +162,24 @@ NVIDIA_VISIBLE_DEVICES=0 CONTAINER_NAME=comfyui-g0 COMFY_PORT=8188 MODELS_ROOT=/
 NVIDIA_VISIBLE_DEVICES=1 CONTAINER_NAME=comfyui-g1 COMFY_PORT=8189 MODELS_ROOT=/data/shared-models SRC=/data/shard1 FINAL_OUTPUT_DIR=/data/out1 ./run_full_pipeline.sh
 NVIDIA_VISIBLE_DEVICES=2 CONTAINER_NAME=comfyui-g2 COMFY_PORT=8190 MODELS_ROOT=/data/shared-models SRC=/data/shard2 FINAL_OUTPUT_DIR=/data/out2 ./run_full_pipeline.sh
 NVIDIA_VISIBLE_DEVICES=3 CONTAINER_NAME=comfyui-g3 COMFY_PORT=8191 MODELS_ROOT=/data/shared-models SRC=/data/shard3 FINAL_OUTPUT_DIR=/data/out3 ./run_full_pipeline.sh
+```
+
+Automatic multi-GPU launcher (auto-shard one big `SRC` across detected GPUs):
+
+```bash
+SRC="/data/full-dataset" \
+MODELS_ROOT="/data/shared-models" \
+FINAL_OUTPUT_DIR="/data/final-outputs" \
+./run_multi_gpu_pipeline.sh
+
+# Optional: limit to first 2 detected GPUs
+SRC="/data/full-dataset" MAX_GPUS=2 ./run_multi_gpu_pipeline.sh
+
+# Optional: explicit GPU ids
+SRC="/data/full-dataset" GPU_IDS="0,1,3" ./run_multi_gpu_pipeline.sh
+
+# Optional on one-GPU machines: auto-stop other running comfyui containers
+SRC="/data/full-dataset" MAX_GPUS=1 SINGLE_GPU_CONFLICT_MODE=stop ./run_multi_gpu_pipeline.sh
 ```
 
 ---
@@ -263,17 +281,37 @@ docker compose -p comfyui-container down
 
 ## Running the Pipeline
 
-The pipeline consists of three stages, each with a dedicated script in the `bin/` directory.
+The pipeline consists of four runtime stages, each with a dedicated script in the `bin/` directory.
 
-### Stage 1: ComfyUI Inpainting
+### Stage 1: SAM3 Tiled Mask Generation
 
-Process images through ComfyUI workflow with SAM3 segmentation and inpainting.
+Generate per-image SAM3 sky/glare masks.
+
+```bash
+docker exec comfyui-container python /workspace/inpainting/sam3_tiled_mask.py \
+  --input-dir /workspace/ComfyUI/input/<batch-name> \
+  --output-dir /workspace/output-sam3-mask/<batch-name> \
+  --pattern "*" \
+  --workers 1
+```
+
+**Output:** `comfyui_data/<container-name>/output-sam3-mask/<batch-name>/*.png`
+
+This stage uses the transformers-based SAM3 loader (`Sam3Model`/`Sam3Processor`) from the local model directory under `/workspace/ComfyUI/models/sam3`.
+
+### Stage 2: ComfyUI Inpainting
+
+Process images through ComfyUI workflow using external SAM3 masks + perspective mask.
 
 ```bash
 docker exec comfyui-container python /workspace/inpainting/comfyui_run.py \
   --workflow-json /workspace/workflow.json \
   --input-dir /workspace/ComfyUI/input/<batch-name> \
   --mask /workspace/ComfyUI/input/perspective_mask.png \
+  --sam3-mask-dir /workspace/output-sam3-mask/<batch-name> \
+  --sam3-mask-node-id 60 \
+  --image-node-id 48 \
+  --mask-node-id 34 \
   --output-dir /workspace/ComfyUI/output/<batch-name> \
   --workers 3
 
@@ -285,27 +323,32 @@ docker exec comfyui-container python /workspace/inpainting/comfyui_run.py \
 
 **Output:** `comfyui_data/<container-name>/output/<batch-name>/*.jpg`
 
-### Stage 2: Postprocessing
+### Stage 3: Postprocessing (Laplacian + Seam Fix)
 
-Apply perspective-to-equirectangular transformation and sky blending.
+Run Laplacian sky replacement using SAM3 masks (`carremoved` as source, `newsky` as destination), then apply perspective top-fix and seam cleanup.
 
 ```bash
 docker exec comfyui-container python /workspace/inpainting/postprocess.py \
   -i /workspace/ComfyUI/output/<batch-name> \
   -o /workspace/output-postprocessed/<batch-name> \
   --top-mask /workspace/inpainting/sky_mask_updated.png \
+  --sam3-mask-dir /workspace/output-sam3-mask/<batch-name> \
+  --dilation 1 \
+  --blur 10 \
+  --levels 7 \
   --pattern "*.jpg" \
   -j 1
 
 # Or use the bin script:
 ./bin/postprocess -i /workspace/ComfyUI/output/<batch-name> \
   -o /workspace/output-postprocessed/<batch-name> \
-  --top-mask /workspace/inpainting/sky_mask_updated.png
+  --top-mask /workspace/inpainting/sky_mask_updated.png \
+  --sam3-mask-dir /workspace/output-sam3-mask/<batch-name>
 ```
 
 **Output:** `comfyui_data/<container-name>/output-postprocessed/<batch-name>/*.jpg`
 
-### Stage 3: EgoBlur (Privacy Protection)
+### Stage 4: EgoBlur (Privacy Protection)
 
 Blur faces and license plates for privacy.
 
@@ -329,11 +372,14 @@ docker exec comfyui-container python /workspace/inpainting/egoblur_infer.py \
 ### Complete Pipeline Example
 
 ```bash
-# 1. Run complete 3-stage pipeline
+# 1. Run complete pipeline
 SRC="/absolute/path/to/input_images"
 FINAL_OUTPUT_DIR="/absolute/path/to/final_outputs"
 BATCH_NAME="batch-$(date +%Y%m%d_%H%M%S)"
 SRC="$SRC" FINAL_OUTPUT_DIR="$FINAL_OUTPUT_DIR" BATCH_NAME="$BATCH_NAME" ./run_full_pipeline.sh
+
+# Optional: stop ComfyUI after inpainting, then run downstream in isolated containers
+SRC="$SRC" BATCH_NAME="$BATCH_NAME" DOWNSTREAM_MODE=isolated COMFY_STOP_CONTAINERS=auto STOP_AFTER_STAGE=postprocess ./run_full_pipeline.sh
 
 # 2. Check stage outputs for this batch
 ls -lah "comfyui_data/comfyui-container/output/$BATCH_NAME"
@@ -356,11 +402,13 @@ Options:
   --workflow-json FILE   [required] - Path to workflow JSON
   --input-dir DIRECTORY  [required] - Input images directory
   --mask FILE            [required] - Inpainting mask
+  --sam3-mask-dir DIR               - Optional per-image SAM3 mask directory
+  --sam3-mask-node-id TEXT          - SAM3 mask node id when SAM3 dir is set
   --output-dir PATH      [default: comfy_outputs]
   --server TEXT          [default: http://127.0.0.1:8188]
   --workers INTEGER      [default: 3] - Parallel processing
-  --image-node-id TEXT   [default: 349] - LoadImage node ID
-  --mask-node-id TEXT    [default: 463] - Mask node ID
+  --image-node-id TEXT   [default: 48] - Main image node ID
+  --mask-node-id TEXT    [default: 34] - Perspective mask node ID
 ```
 
 #### `postprocess.py`
@@ -369,6 +417,10 @@ Options:
   -i, --input PATH       [required] - Input directory
   -o, --output PATH      [required] - Output directory
   --top-mask PATH        [required] - Sky mask for blending
+  --sam3-mask-dir DIR               - Enable Laplacian sky replacement mode
+  --dilation INTEGER     [default: 1]
+  --blur INTEGER         [default: 10]
+  --levels INTEGER       [default: 7]
   --pattern TEXT         [default: *.jpg]
   -j, --workers INTEGER  [default: 1]
   --fov-w INTEGER        [default: 70] - Perspective FOV width (degrees)
@@ -427,6 +479,10 @@ Use this mode when inpainting outputs already exist and you want to free ComfyUI
 
 ```bash
 # 1) Stop ComfyUI API containers (frees ~35GB VRAM/GPU in large runs)
+# single-container default
+docker stop comfyui-container
+
+# multi-GPU example
 docker stop comfyui-g0 comfyui-g1
 
 # 2) Postprocess only (recommended: -j 6)
@@ -436,12 +492,17 @@ docker run --rm --name postproc-g0 --gpus device=0 \
   -v /root/comfyui-workflow-docker/inpainting-workflow-master:/workspace/inpainting \
   -v /root/comfyui-workflow-docker/p2e-local:/workspace/ComfyUI/custom_nodes/p2e \
   -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g0/output:/workspace/ComfyUI/output \
+  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g0/output-sam3-mask:/workspace/output-sam3-mask \
   -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g0/output-postprocessed:/workspace/output-postprocessed \
   amanbagrecha/container-comfyui:latest \
   python /workspace/inpainting/postprocess.py \
     -i /workspace/ComfyUI/output/gpu0-batch \
     -o /workspace/output-postprocessed/gpu0-batch \
     --top-mask /workspace/inpainting/sky_mask_updated.png \
+    --sam3-mask-dir /workspace/output-sam3-mask/gpu0-batch \
+    --dilation 1 \
+    --blur 10 \
+    --levels 7 \
     --pattern "*.jpg" \
     -j 6
 '"
@@ -452,12 +513,17 @@ docker run --rm --name postproc-g1 --gpus device=1 \
   -v /root/comfyui-workflow-docker/inpainting-workflow-master:/workspace/inpainting \
   -v /root/comfyui-workflow-docker/p2e-local:/workspace/ComfyUI/custom_nodes/p2e \
   -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g1/output:/workspace/ComfyUI/output \
+  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g1/output-sam3-mask:/workspace/output-sam3-mask \
   -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g1/output-postprocessed:/workspace/output-postprocessed \
   amanbagrecha/container-comfyui:latest \
   python /workspace/inpainting/postprocess.py \
     -i /workspace/ComfyUI/output/gpu1-batch \
     -o /workspace/output-postprocessed/gpu1-batch \
     --top-mask /workspace/inpainting/sky_mask_updated.png \
+    --sam3-mask-dir /workspace/output-sam3-mask/gpu1-batch \
+    --dilation 1 \
+    --blur 10 \
+    --levels 7 \
     --pattern "*.jpg" \
     -j 6
 '"
@@ -468,9 +534,9 @@ from pathlib import Path
 exts={'.png','.jpg','.jpeg','.webp','.tif','.tiff'}
 for c,b in [('comfyui-g0','gpu0-batch'),('comfyui-g1','gpu1-batch')]:
     base=Path('/root/comfyui-workflow-docker/comfyui_data')/c
-    i=sum(1 for p in (base/'output'/b).rglob('*') if p.is_file() and p.suffix.lower() in exts)
+    i=sum(1 for p in (base/'output'/b).glob('*_comfyui_carremoved.jpg') if p.is_file())
     p=sum(1 for p in (base/'output-postprocessed'/b).rglob('*') if p.is_file() and p.suffix.lower() in exts)
-    print(f'{c} inpaint={i} postprocess={p}')
+    print(f'{c} carremoved={i} postprocess={p} match={i==p}')
 PY
 
 # 4) Egoblur only (requested setting: --workers 12)

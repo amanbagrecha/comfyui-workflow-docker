@@ -1,4 +1,4 @@
-# ComfyUI Inpainting & EgoBlur Pipeline
+# ComfyUI Inpainting & Privacy Blur Pipeline
 
 Complete Docker-based pipeline for 360° image inpainting with SAM3 segmentation, perspective transformation, and privacy blurring (faces & license plates).
 
@@ -92,8 +92,8 @@ The script will download:
 - **Diffusion Model**: Qwen Image Edit 2509 (FP8)
 - **SAM3**: Segment Anything Model 3 in HF transformers format (from [public mirror](https://huggingface.co/aravgarg588/comfyui-container-model))
 - **SimpleLama Checkpoint**: `big-lama.pt` for postprocess inpainting
-- **EgoBlur Face**: Face detection model (from [public mirror](https://huggingface.co/aravgarg588/comfyui-container-model))
-- **EgoBlur License Plate**: License plate detection model (from [public mirror](https://huggingface.co/aravgarg588/comfyui-container-model))
+- **Privacy Face Detector**: Ultralytics YOLOv8n face model (`face_yolov8n.pt`)
+- **Privacy LP Detector**: YOLOv9-s-608 ONNX license plate model (`yolo-v9-s-608-license-plates-end2end.onnx`)
 
 **Note:** The script automatically skips models that already exist, so you can safely re-run it. No HuggingFace token required!
 `big-lama.pt` is saved at `models/comfyui/lama/big-lama.pt` and used by postprocess via `LAMA_MODEL`.
@@ -120,9 +120,11 @@ Default values:
 | COMFYUI_DATA_ROOT | ./comfyui_data |
 | MODELS_ROOT | ./models |
 | MODELS_COMFYUI_DIR | ./models/comfyui |
-| MODELS_EGOBLUR_DIR | ./models/egoblur_gen2 |
+| MODELS_EGOBLUR_DIR | ./models/egoblur_gen2 (legacy) |
+| MODELS_PRIVACY_DIR | ./models/privacy_blur |
 | POSTPROCESS_WORKERS | 4 |
-| EGOBLUR_WORKERS | 4 |
+| EGOBLUR_WORKERS | 4 (legacy) |
+| PRIVACY_WORKERS | 2 |
 | SAM3_WORKERS | 4 |
 | DOWNSTREAM_MODE | isolated |
 | STOP_AFTER_STAGE | egoblur |
@@ -142,9 +144,9 @@ RUN_NAME="multigpu-$(date +%Y%m%d_%H%M%S)" \
 
 Notes:
 - `SRC` is your image folder.
-- Final egoblur outputs are copied to `FINAL_OUTPUT_DIR/<run-name>/gpu<id>/`.
+- Final privacy-blur outputs are copied to `FINAL_OUTPUT_DIR/<run-name>/gpu<id>/`.
 - Intermediate outputs are stored under `comfyui_data/<container-name>/` per GPU shard (for example, `comfyui-g0`, `comfyui-g1`).
-- Defaults: `POSTPROCESS_WORKERS=4`, `EGOBLUR_WORKERS=4`, `SAM3_WORKERS=4`.
+- Defaults: `POSTPROCESS_WORKERS=4`, `PRIVACY_WORKERS=2`, `SAM3_WORKERS=4`.
 - Default rerun behavior is skip/resume (`FORCE_REPROCESS=0`); set `FORCE_REPROCESS=1` to clear the batch and rerun from scratch.
 
 Optional overrides:
@@ -156,7 +158,7 @@ MAX_GPUS=2 \
 BASE_COMFY_PORT=8188 \
 CONTAINER_PREFIX="comfyui-g" \
 POSTPROCESS_WORKERS=4 \
-EGOBLUR_WORKERS=4 \
+PRIVACY_WORKERS=2 \
 MODELS_ROOT="/absolute/path/to/shared-model-cache" \
 AUTO_DOWNLOAD_MODELS=1 \
 FORCE_REPROCESS=0 \
@@ -166,7 +168,7 @@ FORCE_REPROCESS=0 \
 Image quality defaults:
 - ComfyUI inpainting output (`workflow-updated.json`) saves JPG at quality `80`.
 - Postprocess stage saves JPG at quality `85`.
-- Egoblur stage saves JPG at quality `85`.
+- Privacy blur stage saves JPG at quality `85`.
 
 Automatic multi-GPU launcher (auto-shard one big `SRC` across detected GPUs):
 
@@ -245,7 +247,7 @@ docker logs comfyui-container --tail 50
 To start just the ComfyUI container (without running the full pipeline) for debugging or API access:
 
 ```bash
-# Using all defaults (./models/comfyui, ./models/egoblur_gen2, ./comfyui_data/comfyui-container)
+# Using all defaults (./models/comfyui, ./models/privacy_blur, ./comfyui_data/comfyui-container)
 docker compose -p comfyui-container up -d
 
 # With custom model path (shared model cache)
@@ -263,7 +265,8 @@ Default values:
 | Variable | Default |
 |----------|---------|
 | MODELS_COMFYUI_DIR | ./models/comfyui |
-| MODELS_EGOBLUR_DIR | ./models/egoblur_gen2 |
+| MODELS_EGOBLUR_DIR | ./models/egoblur_gen2 (legacy) |
+| MODELS_PRIVACY_DIR | ./models/privacy_blur |
 | COMFYUI_DATA_DIR | ./comfyui_data/comfyui-container |
 | COMFY_PORT | 8188 |
 | CONTAINER_NAME | comfyui-container |
@@ -354,23 +357,19 @@ docker exec -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt comfyui-con
 
 `postprocess.py` uses `LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt` so workers do not race on first-time model download.
 
-### Stage 4: EgoBlur (Privacy Protection)
+### Stage 4: Privacy Blur (Face + LP)
 
-Blur faces and license plates for privacy.
+Blur faces and license plates using `privacy_blur_parallel.sh` and `privacy_blur_infer.py`.
 
 ```bash
-docker exec comfyui-container python /workspace/inpainting/egoblur_infer.py \
-  --input-dir /workspace/output-postprocessed/<batch-name> \
-  --output-dir /workspace/output-egoblur/<batch-name> \
-  --face-model /workspace/inpainting/models/egoblur_gen2/ego_blur_face_gen2.jit \
-  --lp-model /workspace/inpainting/models/egoblur_gen2/ego_blur_lp_gen2.jit \
-  --workers 1
-
-# Or use the bin script:
-./bin/egoblur --input-dir /workspace/output-postprocessed/<batch-name> \
-  --output-dir /workspace/output-egoblur/<batch-name> \
-  --face-model /workspace/inpainting/models/egoblur_gen2/ego_blur_face_gen2.jit \
-  --lp-model /workspace/inpainting/models/egoblur_gen2/ego_blur_lp_gen2.jit
+SRC="/root/comfyui-workflow-docker/comfyui_data/comfyui-container/output-postprocessed/<batch-name>" \
+OUT_ROOT="/root/comfyui-workflow-docker/comfyui_data/comfyui-container/output-egoblur/<batch-name>" \
+FACE_MODEL="/root/comfyui-workflow-docker/models/privacy_blur/face_yolov8n.pt" \
+LP_MODEL="/root/comfyui-workflow-docker/models/privacy_blur/yolo-v9-s-608-license-plates-end2end.onnx" \
+WORKERS=2 \
+OUTPUT_MODE=blur_only \
+PYTHON_BIN=/data/.venv/bin/python \
+bash /root/comfyui-workflow-docker/inpainting-workflow-master/privacy_blur_parallel.sh
 ```
 
 **Output:** `comfyui_data/<container-name>/output-egoblur/<batch-name>/*.jpg`
@@ -436,18 +435,22 @@ Options:
   --v-deg FLOAT          [default: 50] - Vertical rotation
 ```
 
-#### `egoblur_infer.py`
+#### `privacy_blur_infer.py`
 ```bash
 Options:
   --input-dir DIRECTORY  [required]
   --output-dir PATH      [required]
-  --face-model FILE      [required] - Face detection model
-  --lp-model FILE        [required] - License plate model
-  --workers INTEGER      [default: 4] - Use 1 for CUDA
-  --blur [soft|pixelate] [default: soft]
-  --blur-strength FLOAT  [default: 0.5]
-  --face-threshold FLOAT [default: 0.3]
-  --lp-threshold FLOAT   [default: 0.4]
+  --face-model FILE      [default: models/privacy_blur/face_yolov8n.pt]
+  --lp-model FILE        [default: models/privacy_blur/yolo-v9-s-608-license-plates-end2end.onnx]
+  --face-conf FLOAT      [default: 0.4]
+  --lp-conf FLOAT        [default: 0.4]
+  --face-iou FLOAT       [default: 0.5]
+  --face-imgsz INTEGER   [default: 1024]
+  --det-face-w INTEGER   [default: 1024]
+  --p360-device TEXT     [default: auto]
+  --blur-scope TEXT      [default: roi]
+  --blur-backend TEXT    [default: gpu]
+  --output-mode TEXT     [default: blur_only]
 ```
 
 ---
@@ -480,20 +483,16 @@ docker build -t container-comfyui:latest .
 docker compose up -d
 ```
 
-### Run Postprocess/EgoBlur Without ComfyUI API
+### Run Postprocess/Privacy Blur Without ComfyUI API
 
 Use this mode when inpainting outputs already exist and you want to free ComfyUI VRAM before downstream stages.
 
 ```bash
-# 1) Stop ComfyUI API containers (frees ~35GB VRAM/GPU in large runs)
-# single-container default
+# 1) Stop ComfyUI API containers to free VRAM
 docker stop comfyui-container
+# multi-GPU example: docker stop comfyui-g0 comfyui-g1
 
-# multi-GPU example
-docker stop comfyui-g0 comfyui-g1
-
-# 2) Postprocess only (recommended: -j 6)
-tmux new-session -d -s postproc-g0 "bash -lc '
+# 2) Postprocess only (example: gpu0, recommended -j 6)
 docker run --rm --name postproc-g0 --gpus device=0 \
   -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt \
   -v /root/comfyui-workflow-docker/models/comfyui:/workspace/ComfyUI/models:ro \
@@ -513,89 +512,31 @@ docker run --rm --name postproc-g0 --gpus device=0 \
     --levels 7 \
     --pattern "*.jpg" \
     -j 6
-'"
 
-tmux new-session -d -s postproc-g1 "bash -lc '
-docker run --rm --name postproc-g1 --gpus device=1 \
-  -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt \
-  -v /root/comfyui-workflow-docker/models/comfyui:/workspace/ComfyUI/models:ro \
-  -v /root/comfyui-workflow-docker/inpainting-workflow-master:/workspace/inpainting \
-  -v /root/comfyui-workflow-docker/p2e-local:/workspace/ComfyUI/custom_nodes/p2e \
-  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g1/output:/workspace/ComfyUI/output \
-  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g1/output-sam3-mask:/workspace/output-sam3-mask \
-  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g1/output-postprocessed:/workspace/output-postprocessed \
-  amanbagrecha/container-comfyui:latest \
-  python /workspace/inpainting/postprocess.py \
-    -i /workspace/ComfyUI/output/gpu1-batch \
-    -o /workspace/output-postprocessed/gpu1-batch \
-    --top-mask /workspace/inpainting/sky_mask_updated.png \
-    --sam3-mask-dir /workspace/output-sam3-mask/gpu1-batch \
-    --dilation 1 \
-    --blur 10 \
-    --levels 7 \
-    --pattern "*.jpg" \
-    -j 6
-'"
+# 3) Privacy blur only (host-side parallel runner)
+SRC="/root/comfyui-workflow-docker/comfyui_data/comfyui-g0/output-postprocessed/gpu0-batch" \
+OUT_ROOT="/root/comfyui-workflow-docker/comfyui_data/comfyui-g0/output-egoblur/gpu0-batch" \
+FACE_MODEL="/root/comfyui-workflow-docker/models/privacy_blur/face_yolov8n.pt" \
+LP_MODEL="/root/comfyui-workflow-docker/models/privacy_blur/yolo-v9-s-608-license-plates-end2end.onnx" \
+WORKERS=2 \
+OUTPUT_MODE=blur_only \
+PYTHON_BIN=/data/.venv/bin/python \
+bash /root/comfyui-workflow-docker/inpainting-workflow-master/privacy_blur_parallel.sh
 
-# 3) Verify postprocess completed before egoblur
+# 4) Verify privacy output count matches postprocess count
 python3 - <<'PY'
 from pathlib import Path
 exts={'.png','.jpg','.jpeg','.webp','.tif','.tiff'}
-for c,b in [('comfyui-g0','gpu0-batch'),('comfyui-g1','gpu1-batch')]:
-    base=Path('/root/comfyui-workflow-docker/comfyui_data')/c
-    i=sum(1 for p in (base/'output'/b).glob('*_comfyui_carremoved.jpg') if p.is_file())
-    p=sum(1 for p in (base/'output-postprocessed'/b).rglob('*') if p.is_file() and p.suffix.lower() in exts)
-    print(f'{c} carremoved={i} postprocess={p} match={i==p}')
-PY
-
-# 4) Egoblur only (requested setting: --workers 12)
-tmux new-session -d -s egoblur-g0 "bash -lc '
-docker run --rm --name egoblur-g0 --gpus device=0 \
-  -v /root/comfyui-workflow-docker/inpainting-workflow-master:/workspace/inpainting \
-  -v /root/comfyui-workflow-docker/models/egoblur_gen2:/workspace/inpainting/models/egoblur_gen2:ro \
-  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g0/output-postprocessed:/workspace/output-postprocessed \
-  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g0/output-egoblur:/workspace/output-egoblur \
-  amanbagrecha/container-comfyui:latest \
-  python /workspace/inpainting/egoblur_infer.py \
-    --input-dir /workspace/output-postprocessed/gpu0-batch \
-    --output-dir /workspace/output-egoblur/gpu0-batch \
-    --face-model /workspace/inpainting/models/egoblur_gen2/ego_blur_face_gen2.jit \
-    --lp-model /workspace/inpainting/models/egoblur_gen2/ego_blur_lp_gen2.jit \
-    --device cuda \
-    --workers 12
-'"
-
-tmux new-session -d -s egoblur-g1 "bash -lc '
-docker run --rm --name egoblur-g1 --gpus device=1 \
-  -v /root/comfyui-workflow-docker/inpainting-workflow-master:/workspace/inpainting \
-  -v /root/comfyui-workflow-docker/models/egoblur_gen2:/workspace/inpainting/models/egoblur_gen2:ro \
-  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g1/output-postprocessed:/workspace/output-postprocessed \
-  -v /root/comfyui-workflow-docker/comfyui_data/comfyui-g1/output-egoblur:/workspace/output-egoblur \
-  amanbagrecha/container-comfyui:latest \
-  python /workspace/inpainting/egoblur_infer.py \
-    --input-dir /workspace/output-postprocessed/gpu1-batch \
-    --output-dir /workspace/output-egoblur/gpu1-batch \
-    --face-model /workspace/inpainting/models/egoblur_gen2/ego_blur_face_gen2.jit \
-    --lp-model /workspace/inpainting/models/egoblur_gen2/ego_blur_lp_gen2.jit \
-    --device cuda \
-    --workers 12
-'"
-
-# 5) Verify egoblur counts match postprocess counts
-python3 - <<'PY'
-from pathlib import Path
-exts={'.png','.jpg','.jpeg','.webp','.tif','.tiff'}
-for c,b in [('comfyui-g0','gpu0-batch'),('comfyui-g1','gpu1-batch')]:
-    base=Path('/root/comfyui-workflow-docker/comfyui_data')/c
-    p=sum(1 for p in (base/'output-postprocessed'/b).rglob('*') if p.is_file() and p.suffix.lower() in exts)
-    e=sum(1 for p in (base/'output-egoblur'/b).rglob('*') if p.is_file() and p.suffix.lower() in exts)
-    print(f'{c} postprocess={p} egoblur={e} match={p==e}')
+base=Path('/root/comfyui-workflow-docker/comfyui_data/comfyui-g0')
+p=sum(1 for x in (base/'output-postprocessed'/'gpu0-batch').rglob('*') if x.is_file() and x.suffix.lower() in exts)
+e=sum(1 for x in (base/'output-egoblur'/'gpu0-batch').rglob('*') if x.is_file() and x.suffix.lower() in exts)
+print(f'postprocess={p} privacy_blur={e} match={p==e}')
 PY
 ```
 
 Notes:
 - `postprocess.py` with high workers can fail partially on GPU OOM; `-j 6` is a safer parallel setting.
-- `egoblur_infer.py --workers 12` is aggressive; if you see instability, lower workers.
+- `privacy_blur_parallel.sh` defaults to `WORKERS=2`; increase carefully based on available VRAM.
 
 ### System Monitoring
 
@@ -671,7 +612,7 @@ sudo lsof -i :8188
   - PyTorch360Convert
 
 ### Pipeline Libraries
-- **EgoBlur**: Face & license plate detection/blurring (installed as package + cloned repo)
+- **Privacy Blur stack**: Ultralytics YOLO face + open-image-models YOLOv9 LP + pytorch360convert projection
 - **p2e**: Perspective-to-equirectangular transformation
 - **simple-lama-inpainting**: LAMA-based inpainting
 - **SAM3**: Segment Anything Model 3 for object detection
@@ -680,6 +621,7 @@ sudo lsof -i :8188
 ```yaml
 - ./models/comfyui:/workspace/ComfyUI/models
 - ./models/egoblur_gen2:/workspace/inpainting/models/egoblur_gen2
+- ./models/privacy_blur:/workspace/models/privacy_blur
 - ${COMFYUI_DATA_DIR}/input:/workspace/ComfyUI/input
 - ${COMFYUI_DATA_DIR}/output:/workspace/ComfyUI/output
 - ${COMFYUI_DATA_DIR}/output-postprocessed:/workspace/output-postprocessed
@@ -697,7 +639,7 @@ sudo lsof -i :8188
 |-------|--------|------|-------|
 | ComfyUI Inpainting | 4 | ~50s | ~12s/image |
 | Postprocessing | 6 | ~13s | ~2s/image |
-| EgoBlur | 6 | ~20s | ~3s/image |
+| Privacy Blur | 6 | ~20s | ~3s/image |
 
 **Total pipeline:** ~83s for 6 images (~14s per image)
 
@@ -708,7 +650,7 @@ sudo lsof -i :8188
 This project uses multiple open-source components:
 - ComfyUI: GPL-3.0
 - SAM3: Apache-2.0
-- EgoBlur: CC-BY-NC-4.0
+- Privacy models/runtimes: follow upstream model licenses (Ultralytics + open-image-models)
 - PyTorch: BSD-3-Clause
 
 Please review individual component licenses for commercial use.

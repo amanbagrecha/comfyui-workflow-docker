@@ -172,6 +172,7 @@ class WorkerConfig:
     blur_strength: float
     pixelate_factor: int
     save_boxes: bool
+    jpeg_quality: int
 
 
 _G_EGOBLUR: Optional[EgoBlurGen2] = None
@@ -225,7 +226,10 @@ def _process_one(args: Tuple[str, str]) -> Tuple[str, bool, str]:
     dt = time.time() - t0
 
     p_out.parent.mkdir(parents=True, exist_ok=True)
-    ok = cv2.imwrite(str(p_out), out)
+    params = []
+    if p_out.suffix.lower() in {".jpg", ".jpeg"}:
+        params = [cv2.IMWRITE_JPEG_QUALITY, int(_G_CFG.jpeg_quality)]
+    ok = cv2.imwrite(str(p_out), out, params)
     if not ok:
         return (p_in.name, False, "cv2.imwrite failed")
 
@@ -297,6 +301,13 @@ def _process_one(args: Tuple[str, str]) -> Tuple[str, bool, str]:
 @click.option(
     "--pixelate-factor", default=10, show_default=True, help="Only for pixelate."
 )
+@click.option(
+    "--jpeg-quality",
+    default=85,
+    show_default=True,
+    type=click.IntRange(1, 100),
+    help="JPEG quality used when --out-ext is .jpg/.jpeg.",
+)
 def main(
     input_dir: Path,
     output_dir: Path,
@@ -315,6 +326,7 @@ def main(
     blur_mode: str,
     blur_strength: float,
     pixelate_factor: int,
+    jpeg_quality: int,
 ):
     # device selection
     if device == "auto":
@@ -361,6 +373,7 @@ def main(
         blur_strength=blur_strength,
         pixelate_factor=pixelate_factor,
         save_boxes=save_boxes,
+        jpeg_quality=jpeg_quality,
     )
 
     t_all = time.time()

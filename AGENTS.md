@@ -11,15 +11,17 @@ This repository runs a 5-stage 360 panorama pipeline:
 4. Panorama postprocess (top blend + seam fix)
 5. EgoBlur (faces/license plates)
 
-## Workflow Source Used by Full Pipeline
-- `run_full_pipeline.sh` runs SAM3 masks via `inpainting-workflow-master/sam3_tiled_mask.py` using the script's CLI defaults (transformers-based SAM3 via `Sam3Model`/`Sam3Processor`).
-- `run_full_pipeline.sh` runs ComfyUI with `--workflow-json /workspace/workflow.json`.
+## Workflow Source Used by Multi-GPU Entry Point
+- Primary entry point is `run_multi_gpu_pipeline.sh`.
+- `run_multi_gpu_pipeline.sh` shards `SRC` and launches one `run_full_pipeline.sh` job per GPU in tmux.
+- Each per-GPU `run_full_pipeline.sh` job runs SAM3 masks via `inpainting-workflow-master/sam3_tiled_mask.py` using CLI defaults (transformers-based SAM3 via `Sam3Model`/`Sam3Processor`).
+- Each per-GPU `run_full_pipeline.sh` job runs ComfyUI with `--workflow-json /workspace/workflow.json`.
 - `docker-compose.yml` mounts `/workspace/workflow.json` from `workflow-updated.json`.
 - `docker-compose.yml` still mounts `/workspace/workflow_SAM3_prompt.json` from `workflow_SAM3_prompt.json` for optional/manual workflows.
-- Result: running the full pipeline script uses `sam3_tiled_mask.py` CLI defaults and `workflow-updated.json` for ComfyUI inpainting.
+- Result: running `run_multi_gpu_pipeline.sh` uses `sam3_tiled_mask.py` CLI defaults and `workflow-updated.json` for ComfyUI inpainting on every shard.
 
 ## One-Command Behavior
-`run_full_pipeline.sh` bootstraps setup automatically:
+`run_multi_gpu_pipeline.sh` is the user-facing one-command runner and, through per-GPU `run_full_pipeline.sh` jobs, bootstraps setup automatically:
 - Ensures `$COMFYUI_DATA_DIR/input/perspective_mask.png` exists (copies from `inpainting-workflow-master/perspective_mask.png` if missing).
 - Checks required models (including `models/comfyui/lama/big-lama.pt`) and runs `download-models.sh` if missing (`AUTO_DOWNLOAD_MODELS=1`).
 - Starts the container via `docker compose -p "$CONTAINER_NAME" up -d` if not already up.
@@ -29,27 +31,36 @@ This repository runs a 5-stage 360 panorama pipeline:
 Useful env vars (with defaults):
 - `SRC` (input dataset folder, no default - must be provided)
 - `FINAL_OUTPUT_DIR` (where final egoblur outputs are copied, no default - optional)
-- `BATCH_NAME` (default: `batch-$(date +%Y%m%d_%H%M%S)`)
+- `RUN_NAME` (default: `multigpu-$(date +%Y%m%d_%H%M%S)`)
+- `GPU_IDS` (default: `auto`; supports comma list like `0,1,3`)
+- `MAX_GPUS` (default: `0`, meaning all detected GPUs)
+- `BASE_COMFY_PORT` (default: `8188`)
+- `CONTAINER_PREFIX` (default: `comfyui-g`)
+- `COMFYUI_DATA_ROOT` (default: `./comfyui_data`)
+- `TMUX_SESSION_PREFIX` (default: `mgpu`)
+- `WORK_ROOT` (default: `./tmp/multigpu/$RUN_NAME`)
+- `WAIT_POLL_SEC` (default: `10`)
+- `SINGLE_GPU_CONFLICT_MODE` (default: `warn`; `off|warn|stop`)
 - `POSTPROCESS_WORKERS` (default: `4`)
 - `EGOBLUR_WORKERS` (default: `4`)
 - `SAM3_WORKERS` (default: `4`)
 - `LAPLACIAN_DILATION` (default: `1`)
 - `LAPLACIAN_BLUR` (default: `10`)
 - `LAPLACIAN_LEVELS` (default: `7`)
-- `CONTAINER_NAME` (default: `comfyui-container`)
-- `COMFYUI_DATA_DIR` (default: `$REPO/comfyui_data/$CONTAINER_NAME`)
-- `NVIDIA_VISIBLE_DEVICES` (default: `0`)
-- `COMFY_PORT` (default: `8188`)
 - `MODELS_ROOT` (default: `./models`)
 - `MODELS_COMFYUI_DIR` (default: `$MODELS_ROOT/comfyui`)
 - `MODELS_EGOBLUR_DIR` (default: `$MODELS_ROOT/egoblur_gen2`)
 - `FORCE_REPROCESS` (default: `0`)
-- `DOWNSTREAM_MODE` (default: `inline`; set `isolated` to stop ComfyUI before postprocess/egoblur)
-- `COMFY_STOP_CONTAINERS` (default: `auto`; or comma list like `comfyui-g0,comfyui-g1`)
+- `DOWNSTREAM_MODE` (default: `isolated`)
 - `STOP_AFTER_STAGE` (default: `egoblur`; supports `inpainting` or `postprocess` for partial runs)
+- `AUTO_INSTALL_NVIDIA_TOOLKIT` (default: `1`)
+- `COMFY_READY_TIMEOUT` (default: `300`)
+- `COMFY_READY_POLL` (default: `2`)
+- `NVIDIA_CUDA_TEST_IMAGE` (default: `nvidia/cuda:12.6.0-base-ubuntu22.04`)
+- `RESET_CONTAINER_BEFORE_RUN` (default: `1`)
 
-## What the Full Pipeline Does
-`run_full_pipeline.sh` performs the following stages:
+## What the Pipeline Does Per GPU Shard
+Each per-GPU `run_full_pipeline.sh` shard job performs the following stages:
 
 1. **Stage input dataset**
    - Reads images from `SRC`.
@@ -90,50 +101,54 @@ Useful env vars (with defaults):
 
 ## How to Run
 
-Use `run_full_pipeline.sh` for normal end-to-end runs. If you want every runtime setting to be explicit in the command (with defaults where defaults exist), use:
+Use `run_multi_gpu_pipeline.sh` as the default entry point for end-to-end runs. If you want every relevant runtime setting to be explicit in the command, use:
+Do not provide user-facing `run_full_pipeline.sh` commands unless explicitly requested for debugging a single shard.
 
 ```bash
 SRC="" \
 FINAL_OUTPUT_DIR="" \
-BATCH_NAME="batch-$(date +%Y%m%d_%H%M%S)" \
+RUN_NAME="multigpu-$(date +%Y%m%d_%H%M%S)" \
+GPU_IDS="auto" \
+MAX_GPUS=0 \
+BASE_COMFY_PORT=8188 \
+CONTAINER_PREFIX="comfyui-g" \
+COMFYUI_DATA_ROOT="./comfyui_data" \
+TMUX_SESSION_PREFIX="mgpu" \
+WAIT_POLL_SEC=10 \
+SINGLE_GPU_CONFLICT_MODE="warn" \
 POSTPROCESS_WORKERS=4 \
 EGOBLUR_WORKERS=4 \
 SAM3_WORKERS=4 \
 LAPLACIAN_DILATION=1 \
 LAPLACIAN_BLUR=10 \
 LAPLACIAN_LEVELS=7 \
-CONTAINER_NAME="comfyui-container" \
-COMFYUI_DATA_DIR="./comfyui_data/comfyui-container" \
-NVIDIA_VISIBLE_DEVICES=0 \
-COMFY_PORT=8188 \
 MODELS_ROOT="./models" \
 MODELS_COMFYUI_DIR="./models/comfyui" \
 MODELS_EGOBLUR_DIR="./models/egoblur_gen2" \
 AUTO_DOWNLOAD_MODELS=1 \
 FORCE_REPROCESS=0 \
-DOWNSTREAM_MODE="inline" \
-COMFY_STOP_CONTAINERS="auto" \
+DOWNSTREAM_MODE="isolated" \
 STOP_AFTER_STAGE="egoblur" \
 AUTO_INSTALL_NVIDIA_TOOLKIT=1 \
 COMFY_READY_TIMEOUT=300 \
 COMFY_READY_POLL=2 \
 NVIDIA_CUDA_TEST_IMAGE="nvidia/cuda:12.6.0-base-ubuntu22.04" \
-./run_full_pipeline.sh
+RESET_CONTAINER_BEFORE_RUN=1 \
+./run_multi_gpu_pipeline.sh
 ```
 
-For automatic multi-GPU sharding/launch from one large `SRC`, use `run_multi_gpu_pipeline.sh`.
-It auto-detects GPUs, round-robin shards inputs, launches one `run_full_pipeline.sh` per GPU in tmux,
+`run_multi_gpu_pipeline.sh` auto-detects GPUs, round-robin shards inputs, launches one shard run per GPU in tmux,
 pins each run to its own container/GPU, and keeps downstream stop behavior container-local.
 
 Set `SRC` and `FINAL_OUTPUT_DIR` to real paths when needed.
 
-Single-command run:
+Single-command run (recommended entry point):
 
 ```bash
 SRC="/absolute/path/to/input_images" \
 FINAL_OUTPUT_DIR="/absolute/path/to/final_outputs" \
-BATCH_NAME="batch-$(date +%Y%m%d_%H%M%S)" \
-./run_full_pipeline.sh
+RUN_NAME="multigpu-$(date +%Y%m%d_%H%M%S)" \
+./run_multi_gpu_pipeline.sh
 ```
 
 Shared model cache run:
@@ -142,8 +157,17 @@ Shared model cache run:
 SRC="/absolute/path/to/input_images" \
 FINAL_OUTPUT_DIR="/absolute/path/to/final_outputs" \
 MODELS_ROOT="/absolute/path/to/shared-model-cache" \
-BATCH_NAME="batch-$(date +%Y%m%d_%H%M%S)" \
-./run_full_pipeline.sh
+RUN_NAME="multigpu-$(date +%Y%m%d_%H%M%S)" \
+./run_multi_gpu_pipeline.sh
+```
+
+Pin to specific GPUs:
+
+```bash
+SRC="/absolute/path/to/input_images" \
+FINAL_OUTPUT_DIR="/absolute/path/to/final_outputs" \
+GPU_IDS="0,1,3" \
+./run_multi_gpu_pipeline.sh
 ```
 
 Check outputs:
@@ -159,7 +183,7 @@ ls -lah comfyui_data/<container-name>/output-egoblur/<batch-name>
 Force full reprocess of an existing batch:
 
 ```bash
-FORCE_REPROCESS=1 ./run_full_pipeline.sh
+FORCE_REPROCESS=1 ./run_multi_gpu_pipeline.sh
 ```
 
 Independent stage run (without ComfyUI API):
@@ -215,7 +239,8 @@ Count-check rule before/after egoblur:
 
 ## Image Output Quality
 - ComfyUI inpainting save node (`workflow-updated.json`) writes JPG at quality `80`.
-- Postprocess stage writes JPG at quality `90`.
+- Postprocess stage writes JPG at quality `85`.
+- Egoblur stage writes JPG at quality `85`.
 
 ## Host-Side Input and Output Paths
 - Source dataset: `/data/comfyui-workflow-docker/pano_data/<dataset-or-smoke-dir>`

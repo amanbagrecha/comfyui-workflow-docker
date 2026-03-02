@@ -352,12 +352,12 @@ def read_rgb(path: Path):
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB).astype(np.uint8)
 
 
-def write_rgb(path: Path, rgb_u8: np.ndarray):
+def write_rgb(path: Path, rgb_u8: np.ndarray, jpeg_quality: int = 85):
     path.parent.mkdir(parents=True, exist_ok=True)
     bgr = cv2.cvtColor(rgb_u8, cv2.COLOR_RGB2BGR)
     params = []
     if path.suffix.lower() in {".jpg", ".jpeg"}:
-        params = [cv2.IMWRITE_JPEG_QUALITY, 90]
+        params = [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)]
     cv2.imwrite(str(path), bgr, params)
 
 
@@ -536,6 +536,7 @@ def process_one(
     levels: int,
     roi_pad: int,
     laplacian_fp16: bool,
+    jpeg_quality: int,
 ):
     global _LAMA, _TOP_MASK
 
@@ -575,7 +576,7 @@ def process_one(
         mask_sigma=mask_sigma,
     )
 
-    write_rgb(Path(out_path), img)
+    write_rgb(Path(out_path), img, jpeg_quality=jpeg_quality)
     return out_path
 
 
@@ -684,6 +685,13 @@ def process_one(
     help="Seam blend feather radius",
 )
 @click.option("--mask-sigma", default=3.0, show_default=True, type=float)
+@click.option(
+    "--jpeg-quality",
+    default=85,
+    show_default=True,
+    type=click.IntRange(1, 100),
+    help="JPEG quality used when output extension is .jpg/.jpeg",
+)
 def main(
     input_path: Path,
     output_dir: Path,
@@ -711,6 +719,7 @@ def main(
     pad: int,
     seam_feather: int,
     mask_sigma: float,
+    jpeg_quality: int,
 ):
     t0 = time.perf_counter()
 
@@ -796,6 +805,7 @@ def main(
                     levels,
                     laplacian_roi_pad,
                     laplacian_fp16,
+                    jpeg_quality,
                 )
                 click.echo(f"OK   {Path(in_p).name} -> {Path(out_p).name}")
             except Exception as exc:
@@ -830,6 +840,7 @@ def main(
                     levels,
                     laplacian_roi_pad,
                     laplacian_fp16,
+                    jpeg_quality,
                 ): (in_p, out_p)
                 for in_p, out_p, sky_p, sam3_p in jobs
             }

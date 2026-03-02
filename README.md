@@ -77,7 +77,7 @@ docker pull amanbagrecha/container-comfyui:latest
 
 ### Step 2: Download Required Models (optional prefetch)
 
-Models are not included in the Docker image due to their size. You can pre-download them now, or skip this step and let `run_full_pipeline.sh` auto-download missing models.
+Models are not included in the Docker image due to their size. You can pre-download them now, or skip this step and let `run_multi_gpu_pipeline.sh` auto-download missing models during shard runs.
 
 ```bash
 # Run the model download script
@@ -98,30 +98,37 @@ The script will download:
 **Note:** The script automatically skips models that already exist, so you can safely re-run it. No HuggingFace token required!
 `big-lama.pt` is saved at `models/comfyui/lama/big-lama.pt` and used by postprocess via `LAMA_MODEL`.
 
-### Step 3: Run Full Pipeline (one command)
+### Step 3: Run Multi-GPU Pipeline (one command, recommended entry point)
 
-`run_full_pipeline.sh` now auto-creates local directories, auto-copies `perspective_mask.png` into `$COMFYUI_DATA_DIR/input/`, auto-starts Docker (if needed), and can auto-download models if missing.
+`run_multi_gpu_pipeline.sh` is the primary entry point. It auto-shards one large `SRC`, launches one tmux job per GPU, and each shard run auto-creates local directories, auto-copies `perspective_mask.png` into `$COMFYUI_DATA_DIR/input/`, auto-starts Docker (if needed), and can auto-download models if missing.
 
 ```bash
 SRC="/absolute/path/to/your/input_images" \
 FINAL_OUTPUT_DIR="/absolute/path/to/your/final_outputs" \
-BATCH_NAME="batch-$(date +%Y%m%d_%H%M%S)" \
-./run_full_pipeline.sh
+RUN_NAME="multigpu-$(date +%Y%m%d_%H%M%S)" \
+./run_multi_gpu_pipeline.sh
 ```
 
 Default values:
 | Variable | Default |
 |----------|---------|
+| RUN_NAME | multigpu-YYYYmmdd_HHMMSS |
+| GPU_IDS | auto |
+| MAX_GPUS | 0 (all detected) |
+| BASE_COMFY_PORT | 8188 |
+| CONTAINER_PREFIX | comfyui-g |
+| COMFYUI_DATA_ROOT | ./comfyui_data |
 | MODELS_ROOT | ./models |
 | MODELS_COMFYUI_DIR | ./models/comfyui |
 | MODELS_EGOBLUR_DIR | ./models/egoblur_gen2 |
-| COMFYUI_DATA_DIR | ./comfyui_data/comfyui-container |
-| CONTAINER_NAME | comfyui-container |
 | POSTPROCESS_WORKERS | 4 |
 | EGOBLUR_WORKERS | 4 |
 | SAM3_WORKERS | 4 |
+| DOWNSTREAM_MODE | isolated |
+| STOP_AFTER_STAGE | egoblur |
 | FORCE_REPROCESS | 0 |
 | AUTO_DOWNLOAD_MODELS | 1 |
+| RESET_CONTAINER_BEFORE_RUN | 1 |
 
 For shared models across multiple repo copies or machines mounted on shared storage:
 
@@ -129,43 +136,37 @@ For shared models across multiple repo copies or machines mounted on shared stor
 SRC="/absolute/path/to/your/input_images" \
 FINAL_OUTPUT_DIR="/absolute/path/to/your/final_outputs" \
 MODELS_ROOT="/absolute/path/to/shared-model-cache" \
-BATCH_NAME="batch-$(date +%Y%m%d_%H%M%S)" \
-./run_full_pipeline.sh
+RUN_NAME="multigpu-$(date +%Y%m%d_%H%M%S)" \
+./run_multi_gpu_pipeline.sh
 ```
 
 Notes:
 - `SRC` is your image folder.
-- Final egoblur outputs are copied to `FINAL_OUTPUT_DIR/<batch-name>/`.
-- Intermediate outputs are stored under `comfyui_data/<container-name>/` by default.
+- Final egoblur outputs are copied to `FINAL_OUTPUT_DIR/<run-name>/gpu<id>/`.
+- Intermediate outputs are stored under `comfyui_data/<container-name>/` per GPU shard (for example, `comfyui-g0`, `comfyui-g1`).
 - Defaults: `POSTPROCESS_WORKERS=4`, `EGOBLUR_WORKERS=4`, `SAM3_WORKERS=4`.
 - Default rerun behavior is skip/resume (`FORCE_REPROCESS=0`); set `FORCE_REPROCESS=1` to clear the batch and rerun from scratch.
 
 Optional overrides:
 
 ```bash
-CONTAINER_NAME="comfyui-container" \
+RUN_NAME="multigpu-myrun" \
+GPU_IDS="0,1,3" \
+MAX_GPUS=2 \
+BASE_COMFY_PORT=8188 \
+CONTAINER_PREFIX="comfyui-g" \
 POSTPROCESS_WORKERS=4 \
 EGOBLUR_WORKERS=4 \
 MODELS_ROOT="/absolute/path/to/shared-model-cache" \
-NVIDIA_VISIBLE_DEVICES=0 \
-COMFY_PORT=8188 \
 AUTO_DOWNLOAD_MODELS=1 \
 FORCE_REPROCESS=0 \
-./run_full_pipeline.sh
+./run_multi_gpu_pipeline.sh
 ```
 
 Image quality defaults:
 - ComfyUI inpainting output (`workflow-updated.json`) saves JPG at quality `80`.
-- Postprocess stage saves JPG at quality `90`.
-
-Multi-GPU pattern (one container per GPU, shared models):
-
-```bash
-NVIDIA_VISIBLE_DEVICES=0 CONTAINER_NAME=comfyui-g0 COMFY_PORT=8188 MODELS_ROOT=/data/shared-models SRC=/data/shard0 FINAL_OUTPUT_DIR=/data/out0 ./run_full_pipeline.sh
-NVIDIA_VISIBLE_DEVICES=1 CONTAINER_NAME=comfyui-g1 COMFY_PORT=8189 MODELS_ROOT=/data/shared-models SRC=/data/shard1 FINAL_OUTPUT_DIR=/data/out1 ./run_full_pipeline.sh
-NVIDIA_VISIBLE_DEVICES=2 CONTAINER_NAME=comfyui-g2 COMFY_PORT=8190 MODELS_ROOT=/data/shared-models SRC=/data/shard2 FINAL_OUTPUT_DIR=/data/out2 ./run_full_pipeline.sh
-NVIDIA_VISIBLE_DEVICES=3 CONTAINER_NAME=comfyui-g3 COMFY_PORT=8191 MODELS_ROOT=/data/shared-models SRC=/data/shard3 FINAL_OUTPUT_DIR=/data/out3 ./run_full_pipeline.sh
-```
+- Postprocess stage saves JPG at quality `85`.
+- Egoblur stage saves JPG at quality `85`.
 
 Automatic multi-GPU launcher (auto-shard one big `SRC` across detected GPUs):
 
@@ -380,19 +381,20 @@ docker exec comfyui-container python /workspace/inpainting/egoblur_infer.py \
 # 1. Run complete pipeline
 SRC="/absolute/path/to/input_images"
 FINAL_OUTPUT_DIR="/absolute/path/to/final_outputs"
-BATCH_NAME="batch-$(date +%Y%m%d_%H%M%S)"
-SRC="$SRC" FINAL_OUTPUT_DIR="$FINAL_OUTPUT_DIR" BATCH_NAME="$BATCH_NAME" ./run_full_pipeline.sh
+RUN_NAME="multigpu-$(date +%Y%m%d_%H%M%S)"
+GPU_IDS="0,1"
+SRC="$SRC" FINAL_OUTPUT_DIR="$FINAL_OUTPUT_DIR" RUN_NAME="$RUN_NAME" GPU_IDS="$GPU_IDS" ./run_multi_gpu_pipeline.sh
 
-# Optional: stop ComfyUI after inpainting, then run downstream in isolated containers
-SRC="$SRC" BATCH_NAME="$BATCH_NAME" DOWNSTREAM_MODE=isolated COMFY_STOP_CONTAINERS=auto STOP_AFTER_STAGE=postprocess ./run_full_pipeline.sh
+# Optional: stop after postprocess for partial runs
+SRC="$SRC" RUN_NAME="${RUN_NAME}-post" GPU_IDS="$GPU_IDS" STOP_AFTER_STAGE=postprocess ./run_multi_gpu_pipeline.sh
 
-# 2. Check stage outputs for this batch
-ls -lah "comfyui_data/comfyui-container/output/$BATCH_NAME"
-ls -lah "comfyui_data/comfyui-container/output-postprocessed/$BATCH_NAME"
-ls -lah "comfyui_data/comfyui-container/output-egoblur/$BATCH_NAME"
+# 2. Check stage outputs for one shard
+ls -lah "comfyui_data/comfyui-g0/output/${RUN_NAME}-g0"
+ls -lah "comfyui_data/comfyui-g0/output-postprocessed/${RUN_NAME}-g0"
+ls -lah "comfyui_data/comfyui-g0/output-egoblur/${RUN_NAME}-g0"
 
 # 3. Optional copied final output
-ls -lah "$FINAL_OUTPUT_DIR/$BATCH_NAME"
+ls -lah "$FINAL_OUTPUT_DIR/$RUN_NAME"
 ```
 
 ---
@@ -732,8 +734,8 @@ docker build -t container-comfyui:latest .
 # Start
 docker compose up -d
 
-# Process images (full pipeline)
-SRC="/absolute/path/to/input_images" FINAL_OUTPUT_DIR="/absolute/path/to/final_outputs" BATCH_NAME="batch-$(date +%Y%m%d_%H%M%S)" ./run_full_pipeline.sh
+# Process images (multi-GPU entry point)
+SRC="/absolute/path/to/input_images" FINAL_OUTPUT_DIR="/absolute/path/to/final_outputs" RUN_NAME="multigpu-$(date +%Y%m%d_%H%M%S)" ./run_multi_gpu_pipeline.sh
 
 # Stop
 docker compose down

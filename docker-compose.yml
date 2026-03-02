@@ -12,14 +12,16 @@ services:
       - ./inpainting-workflow-master:/workspace/inpainting
       - ${MODELS_EGOBLUR_DIR:-./models/egoblur_gen2}:/workspace/inpainting/models/egoblur_gen2:ro
       # Input/Output for ComfyUI and inpainting pipeline - use container-specific dirs
-      - ${COMFYUI_DATA_DIR}/input:/workspace/ComfyUI/input
-      - ${COMFYUI_DATA_DIR}/output:/workspace/ComfyUI/output
-      - ${COMFYUI_DATA_DIR}/output-postprocessed:/workspace/output-postprocessed
-      - ${COMFYUI_DATA_DIR}/output-egoblur:/workspace/output-egoblur
+      - ${COMFYUI_DATA_DIR:-./comfyui_data/comfyui-container}/input:/workspace/ComfyUI/input
+      - ${COMFYUI_DATA_DIR:-./comfyui_data/comfyui-container}/output:/workspace/ComfyUI/output
+      - ${COMFYUI_DATA_DIR:-./comfyui_data/comfyui-container}/output-sam3-mask:/workspace/output-sam3-mask
+      - ${COMFYUI_DATA_DIR:-./comfyui_data/comfyui-container}/output-postprocessed:/workspace/output-postprocessed
+      - ${COMFYUI_DATA_DIR:-./comfyui_data/comfyui-container}/output-egoblur:/workspace/output-egoblur
       # p2e custom node (host-editable for debugging)
       - ./p2e-local:/workspace/ComfyUI/custom_nodes/p2e
       # Workflow file
       - ./workflow-updated.json:/workspace/workflow.json:ro
+      - ./workflow_SAM3_prompt.json:/workspace/workflow_SAM3_prompt.json:ro
     deploy:
       resources:
         reservations:

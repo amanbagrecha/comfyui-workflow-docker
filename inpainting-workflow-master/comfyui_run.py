@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 from functools import wraps
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional
 
 import click
 import requests
@@ -12,6 +13,12 @@ import requests
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
 COMFY_INPUT_ROOT = Path("/workspace/ComfyUI/input")
 COMFY_OUTPUT_ROOT = Path("/workspace/ComfyUI/output")
+IMAGE_NODE_TYPES = {"LoadImage", "Image Load"}
+MASK_NODE_TYPES = {"LoadImage", "LoadImageMask", "Image Load"}
+SAVE_NODE_SUFFIX_BY_ID = {
+    "54": "comfyui_newsky",
+    "59": "comfyui_carremoved",
+}
 
 
 def timer(func):
@@ -56,15 +63,26 @@ def timer(func):
 @click.option("--overwrite", is_flag=True)
 @click.option(
     "--image-node-id",
-    default="349",
+    default="48",
     show_default=True,
-    help="LoadImage node for the main image",
+    help="Main image node (LoadImage or WAS Image Load)",
 )
 @click.option(
     "--mask-node-id",
-    default="463",
+    default="34",
     show_default=True,
-    help="LoadImage node for the mask image",
+    help="Static mask node (LoadImage / LoadImageMask / WAS Image Load)",
+)
+@click.option(
+    "--sam3-mask-dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Directory containing per-image SAM3 mask PNGs",
+)
+@click.option(
+    "--sam3-mask-node-id",
+    default="",
+    help="Per-image SAM3 mask node ID (LoadImage / LoadImageMask / WAS Image Load)",
 )
 @click.option("--poll-s", default=1.0, show_default=True)
 @click.option("--timeout-s", default=1800, show_default=True)
@@ -78,23 +96,32 @@ def main(
     overwrite: bool,
     image_node_id: str,
     mask_node_id: str,
+    sam3_mask_dir: Optional[Path],
+    sam3_mask_node_id: str,
     poll_s: float,
     timeout_s: int,
 ):
     """Batch-run a ComfyUI workflow via HTTP API.
 
     This workflow expects:
-      - main image at LoadImage node `image_node_id` (default 349)
-      - mask image at LoadImage node `mask_node_id` (default 463)
+      - main image at node `image_node_id`
+      - static mask image at node `mask_node_id`
+      - optional per-image SAM3 mask at node `sam3_mask_node_id`
 
-    Mask and images are referenced directly from /workspace/ComfyUI/input.
+    Supports standard LoadImage nodes and WAS "Image Load" nodes.
     """
 
     server = server.rstrip("/")
     input_dir = input_dir.resolve()
     mask_path = mask_path.resolve()
+    sam3_mask_dir = sam3_mask_dir.resolve() if sam3_mask_dir else None
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if bool(sam3_mask_dir) != bool(sam3_mask_node_id):
+        raise click.ClickException(
+            "--sam3-mask-dir and --sam3-mask-node-id must be used together"
+        )
 
     try:
         output_subdir = output_dir.relative_to(COMFY_OUTPUT_ROOT).as_posix()
@@ -116,25 +143,41 @@ def main(
             "Workflow JSON must be a dict or contain a top-level 'nodes' dict"
         )
 
-    # Validate node IDs exist
-    if image_node_id not in prompt_template:
-        raise click.ClickException(
-            f"image-node-id {image_node_id} not found in workflow"
-        )
-    if mask_node_id not in prompt_template:
-        raise click.ClickException(f"mask-node-id {mask_node_id} not found in workflow")
-    if prompt_template[image_node_id].get("class_type") != "LoadImage":
-        raise click.ClickException(f"Node {image_node_id} is not a LoadImage node")
-    if prompt_template[mask_node_id].get("class_type") != "LoadImage":
-        raise click.ClickException(f"Node {mask_node_id} is not a LoadImage node")
+    def _validate_node_type(node_id: str, allowed_types: set[str], label: str):
+        if node_id not in prompt_template:
+            raise click.ClickException(
+                f"{label} node-id {node_id} not found in workflow"
+            )
+        class_type = str(prompt_template[node_id].get("class_type", ""))
+        if class_type not in allowed_types:
+            allowed = ", ".join(sorted(allowed_types))
+            raise click.ClickException(
+                f"Node {node_id} ({label}) has unsupported class_type '{class_type}'. "
+                f"Expected one of: {allowed}"
+            )
 
-    save_node_ids = [
-        node_id
-        for node_id, node in prompt_template.items()
-        if isinstance(node, dict) and node.get("class_type") == "Image Save"
-    ]
+    _validate_node_type(image_node_id, IMAGE_NODE_TYPES, "image")
+    _validate_node_type(mask_node_id, MASK_NODE_TYPES, "mask")
+    if sam3_mask_node_id:
+        _validate_node_type(sam3_mask_node_id, MASK_NODE_TYPES, "sam3-mask")
+
+    save_node_ids = sorted(
+        [
+            node_id
+            for node_id, node in prompt_template.items()
+            if isinstance(node, dict) and node.get("class_type") == "Image Save"
+        ],
+        key=lambda node_id: int(node_id) if str(node_id).isdigit() else str(node_id),
+    )
     if not save_node_ids:
         raise click.ClickException("No 'Image Save' node found in workflow")
+
+    def _save_suffix(node_id: str, idx: int) -> str:
+        if node_id in SAVE_NODE_SUFFIX_BY_ID:
+            return SAVE_NODE_SUFFIX_BY_ID[node_id]
+        if idx == 0:
+            return "comfyui"
+        return f"comfyui_{node_id}"
 
     # List input images
     images = sorted(
@@ -155,29 +198,60 @@ def main(
                 f"Path must be inside {COMFY_INPUT_ROOT}: {local_path}"
             ) from exc
 
-    mask_input_name = _to_comfy_input_name(mask_path)
-    click.echo(f"Using fixed mask from ComfyUI input: {mask_input_name}")
+    def _set_image_path(
+        prompt: dict, node_id: str, file_path: Path, label: str
+    ) -> None:
+        node = prompt[node_id]
+        class_type = str(node.get("class_type", ""))
+        inputs = node.setdefault("inputs", {})
+
+        if class_type in {"LoadImage", "LoadImageMask"}:
+            inputs["image"] = _to_comfy_input_name(file_path)
+            return
+
+        if class_type == "Image Load":
+            inputs["image_path"] = str(file_path)
+            inputs.setdefault("RGBA", "false")
+            inputs.setdefault("filename_text_extension", "true")
+            return
+
+        raise click.ClickException(
+            f"Unsupported class_type '{class_type}' for {label} node {node_id}"
+        )
+
+    click.echo(
+        f"main_image_node={image_node_id} class={prompt_template[image_node_id].get('class_type')}"
+    )
+    click.echo(
+        f"fixed_mask_node={mask_node_id} class={prompt_template[mask_node_id].get('class_type')} path={mask_path}"
+    )
+    if sam3_mask_dir:
+        click.echo(
+            f"sam3_mask_node={sam3_mask_node_id} class={prompt_template[sam3_mask_node_id].get('class_type')} dir={sam3_mask_dir}"
+        )
 
     # Per-image worker
     @timer
     def _run_one(img_path: Path) -> str:
-        input_image_name = _to_comfy_input_name(img_path)
-
         # Clone the prompt dict (deep-ish copy) so threads don't fight
         prompt = json.loads(json.dumps(prompt_template))
 
-        # Inject direct filenames into LoadImage nodes (no upload API copy)
-        prompt[image_node_id].setdefault("inputs", {})["image"] = input_image_name
-        prompt[mask_node_id].setdefault("inputs", {})["image"] = mask_input_name
+        _set_image_path(prompt, image_node_id, img_path, "main image")
+        _set_image_path(prompt, mask_node_id, mask_path, "fixed mask")
+
+        if sam3_mask_dir and sam3_mask_node_id:
+            rel = img_path.relative_to(input_dir)
+            sam3_mask_path = sam3_mask_dir / rel.with_suffix(".png")
+            if not sam3_mask_path.exists():
+                raise FileNotFoundError(
+                    f"SAM3 mask not found for {img_path.name}: {sam3_mask_path}"
+                )
+            _set_image_path(prompt, sam3_mask_node_id, sam3_mask_path, "sam3 mask")
 
         expected_outputs = []
         for idx, node_id in enumerate(save_node_ids):
             save_inputs = prompt[node_id].setdefault("inputs", {})
-            save_prefix = (
-                f"{img_path.stem}_comfyui"
-                if idx == 0
-                else f"{img_path.stem}_comfyui_{node_id}"
-            )
+            save_prefix = f"{img_path.stem}_{_save_suffix(node_id, idx)}"
             save_inputs["output_path"] = output_path_value
             save_inputs["filename_prefix"] = save_prefix
             save_inputs["overwrite_mode"] = "prefix_as_filename"
@@ -218,11 +292,10 @@ def main(
                 f"Prompt completed but expected output file(s) not found for {img_path.name}: {', '.join(missing)}"
             )
 
-        return (
-            f"OK   {img_path.name} -> {expected_outputs[0].name}"
-            if len(expected_outputs) == 1
-            else f"OK   {img_path.name} -> {img_path.stem}_comfyui_*"
-        )
+        if len(expected_outputs) == 1:
+            return f"OK   {img_path.name} -> {expected_outputs[0].name}"
+        out_names = ", ".join(p.name for p in expected_outputs)
+        return f"OK   {img_path.name} -> {out_names}"
 
     # Run in parallel
     failures = []

@@ -63,7 +63,7 @@ greenlet==3.3.0
     # via sqlalchemy
 hf-xet==1.2.0
     # via huggingface-hub
-huggingface-hub==0.36.0
+huggingface-hub==1.5.0
     # via
     #   tokenizers
     #   transformers
@@ -226,7 +226,7 @@ tqdm==4.67.1
     #   transformers
 trampoline==0.1.2
     # via torchsde
-transformers==4.57.3
+transformers==5.2.0
     # via -r requirements.txt
 triton==3.5.1
     # via torch
@@ -251,4 +251,3 @@ yarl==1.22.0
     # via
     #   -r requirements.txt
     #   aiohttp
-

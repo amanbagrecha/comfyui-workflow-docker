@@ -10,6 +10,7 @@ SRC="${SRC:-$COMFYUI_DATA_DIR/input}"
 BATCH_NAME="${BATCH_NAME:-batch-$(date +%Y%m%d_%H%M%S)}"
 POSTPROCESS_WORKERS="${POSTPROCESS_WORKERS:-4}"
 EGOBLUR_WORKERS="${EGOBLUR_WORKERS:-4}"
+PRIVACY_WORKERS="${PRIVACY_WORKERS:-2}"
 SAM3_WORKERS="${SAM3_WORKERS:-4}"
 LAPLACIAN_DILATION="${LAPLACIAN_DILATION:-1}"
 LAPLACIAN_BLUR="${LAPLACIAN_BLUR:-10}"
@@ -23,6 +24,19 @@ AUTO_DOWNLOAD_MODELS="${AUTO_DOWNLOAD_MODELS:-1}"
 MODELS_ROOT="${MODELS_ROOT:-$REPO/models}"
 MODELS_COMFYUI_DIR="${MODELS_COMFYUI_DIR:-$MODELS_ROOT/comfyui}"
 MODELS_EGOBLUR_DIR="${MODELS_EGOBLUR_DIR:-$MODELS_ROOT/egoblur_gen2}"
+MODELS_PRIVACY_DIR="${MODELS_PRIVACY_DIR:-$MODELS_ROOT/privacy_blur}"
+PRIVACY_FACE_MODEL="${PRIVACY_FACE_MODEL:-$MODELS_PRIVACY_DIR/face_yolov8n.pt}"
+PRIVACY_LP_MODEL="${PRIVACY_LP_MODEL:-$MODELS_PRIVACY_DIR/yolo-v9-s-608-license-plates-end2end.onnx}"
+PRIVACY_FACE_CONF="${PRIVACY_FACE_CONF:-0.4}"
+PRIVACY_LP_CONF="${PRIVACY_LP_CONF:-0.4}"
+PRIVACY_FACE_IOU="${PRIVACY_FACE_IOU:-0.5}"
+PRIVACY_FACE_IMGSZ="${PRIVACY_FACE_IMGSZ:-1024}"
+PRIVACY_DET_FACE_W="${PRIVACY_DET_FACE_W:-1024}"
+PRIVACY_P360_DEVICE="${PRIVACY_P360_DEVICE:-auto}"
+PRIVACY_BLUR_SCOPE="${PRIVACY_BLUR_SCOPE:-roi}"
+PRIVACY_BLUR_BACKEND="${PRIVACY_BLUR_BACKEND:-gpu}"
+PRIVACY_OUTPUT_MODE="${PRIVACY_OUTPUT_MODE:-blur_only}"
+PRIVACY_PYTHON_BIN="${PRIVACY_PYTHON_BIN:-/data/.venv/bin/python}"
 COMFY_IMAGE="${COMFY_IMAGE:-amanbagrecha/container-comfyui:latest}"
 TORCH_CACHE_DIR="${TORCH_CACHE_DIR:-$HOME/.cache/torch}"
 COMFY_READY_TIMEOUT="${COMFY_READY_TIMEOUT:-300}"
@@ -56,6 +70,7 @@ echo "FORCE_REPROCESS=$FORCE_REPROCESS"
 echo "AUTO_INSTALL_NVIDIA_TOOLKIT=$AUTO_INSTALL_NVIDIA_TOOLKIT"
 echo "POSTPROCESS_WORKERS=$POSTPROCESS_WORKERS"
 echo "EGOBLUR_WORKERS=$EGOBLUR_WORKERS"
+echo "PRIVACY_WORKERS=$PRIVACY_WORKERS"
 echo "SAM3_WORKERS=$SAM3_WORKERS"
 echo "LAPLACIAN_DILATION=$LAPLACIAN_DILATION"
 echo "LAPLACIAN_BLUR=$LAPLACIAN_BLUR"
@@ -68,6 +83,11 @@ echo "RESET_CONTAINER_BEFORE_RUN=$RESET_CONTAINER_BEFORE_RUN"
 echo "INPUT_MODE=$INPUT_MODE"
 echo "MODELS_COMFYUI_DIR=$MODELS_COMFYUI_DIR"
 echo "MODELS_EGOBLUR_DIR=$MODELS_EGOBLUR_DIR"
+echo "MODELS_PRIVACY_DIR=$MODELS_PRIVACY_DIR"
+echo "PRIVACY_FACE_MODEL=$PRIVACY_FACE_MODEL"
+echo "PRIVACY_LP_MODEL=$PRIVACY_LP_MODEL"
+echo "PRIVACY_OUTPUT_MODE=$PRIVACY_OUTPUT_MODE"
+echo "PRIVACY_PYTHON_BIN=$PRIVACY_PYTHON_BIN"
 echo "TORCH_CACHE_DIR=$TORCH_CACHE_DIR"
 echo "COMFY_READY_TIMEOUT=$COMFY_READY_TIMEOUT"
 if [ -n "$FINAL_OUTPUT_DIR" ]; then
@@ -82,6 +102,7 @@ mkdir -p \
   "$COMFYUI_DATA_DIR/output-egoblur" \
   "$MODELS_COMFYUI_DIR" \
   "$MODELS_EGOBLUR_DIR" \
+  "$MODELS_PRIVACY_DIR" \
   "$REPO/inpainting-workflow-master/models/egoblur_gen2"
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -151,6 +172,39 @@ if ! command -v wget >/dev/null 2>&1; then
   echo "ERROR: wget is required (used by download-models.sh)."
   exit 1
 fi
+
+ensure_privacy_python_ready() {
+  local py_bin="$PRIVACY_PYTHON_BIN"
+  if [[ ! -x "$py_bin" ]]; then
+    if command -v python3 >/dev/null 2>&1; then
+      py_bin="$(command -v python3)"
+    else
+      echo "ERROR: privacy blur requires python interpreter but none was found."
+      return 1
+    fi
+  fi
+  PRIVACY_PYTHON_BIN="$py_bin"
+
+  if ! command -v uv >/dev/null 2>&1; then
+    echo "ERROR: privacy blur stage requires 'uv' but it is not available in PATH."
+    return 1
+  fi
+
+  if "$PRIVACY_PYTHON_BIN" - <<'PY' >/dev/null 2>&1
+import cv2
+import numpy
+import pytorch360convert
+import torch
+import ultralytics
+import open_image_models
+PY
+  then
+    return 0
+  fi
+
+  echo "Installing missing privacy blur Python dependencies into $PRIVACY_PYTHON_BIN"
+  uv pip install --python "$PRIVACY_PYTHON_BIN" "open-image-models[onnx-gpu]" ultralytics pytorch360convert
+}
 
 if ! command -v nvidia-smi >/dev/null 2>&1; then
   echo "ERROR: nvidia-smi not found on host. NVIDIA drivers/GPU are required for this pipeline."
@@ -224,8 +278,8 @@ required_files=(
   "$MODELS_COMFYUI_DIR/diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors"
   "$MODELS_COMFYUI_DIR/sam3/model.safetensors"
   "$MODELS_COMFYUI_DIR/lama/big-lama.pt"
-  "$MODELS_EGOBLUR_DIR/ego_blur_face_gen2.jit"
-  "$MODELS_EGOBLUR_DIR/ego_blur_lp_gen2.jit"
+  "$PRIVACY_FACE_MODEL"
+  "$PRIVACY_LP_MODEL"
 )
 
 need_download=0
@@ -450,6 +504,10 @@ if [ "$STOP_AFTER_STAGE" = "inpainting" ]; then
   echo "=== STAGE_SKIP postprocess reason=STOP_AFTER_STAGE=inpainting elapsed_sec=0 ==="
   echo "=== STAGE_SKIP egoblur reason=STOP_AFTER_STAGE=inpainting elapsed_sec=0 ==="
 else
+  if [ "$STOP_AFTER_STAGE" = "egoblur" ]; then
+    ensure_privacy_python_ready
+  fi
+
   if [ "$DOWNSTREAM_MODE" = "isolated" ]; then
     stop_comfy_containers_for_downstream
   fi
@@ -504,32 +562,30 @@ else
   else
     S_EGO=$(date +%s)
     echo "=== STAGE_START egoblur ==="
-    if [ "$DOWNSTREAM_MODE" = "inline" ]; then
-      docker exec "$CONTAINER_NAME" python /workspace/inpainting/egoblur_infer.py \
-        --input-dir /workspace/output-postprocessed/$BATCH_NAME \
-        --output-dir /workspace/output-egoblur/$BATCH_NAME \
-        --face-model /workspace/inpainting/models/egoblur_gen2/ego_blur_face_gen2.jit \
-        --lp-model /workspace/inpainting/models/egoblur_gen2/ego_blur_lp_gen2.jit \
-        --workers "$EGOBLUR_WORKERS"
-    else
-      EGO_DOCKER_ARGS=(
-        --rm
-        --name "egoblur-${RUN_ID}"
-        --gpus "device=${NVIDIA_VISIBLE_DEVICES:-0}"
-        -v "$REPO/inpainting-workflow-master:/workspace/inpainting"
-        -v "$MODELS_EGOBLUR_DIR:/workspace/inpainting/models/egoblur_gen2:ro"
-        -v "$COMFYUI_DATA_DIR/output-postprocessed:/workspace/output-postprocessed"
-        -v "$COMFYUI_DATA_DIR/output-egoblur:/workspace/output-egoblur"
-      )
-      docker run "${EGO_DOCKER_ARGS[@]}" "$COMFY_IMAGE" \
-        python /workspace/inpainting/egoblur_infer.py \
-        --input-dir /workspace/output-postprocessed/$BATCH_NAME \
-        --output-dir /workspace/output-egoblur/$BATCH_NAME \
-        --face-model /workspace/inpainting/models/egoblur_gen2/ego_blur_face_gen2.jit \
-        --lp-model /workspace/inpainting/models/egoblur_gen2/ego_blur_lp_gen2.jit \
-        --device cuda \
-        --workers "$EGOBLUR_WORKERS"
+    PRIVACY_RUNNER="$REPO/inpainting-workflow-master/privacy_blur_parallel.sh"
+    if [ ! -f "$PRIVACY_RUNNER" ]; then
+      echo "ERROR: Privacy blur runner not found at $PRIVACY_RUNNER"
+      exit 1
     fi
+
+    RUN_NAME="privacy-${RUN_ID}" \
+    SRC="$OUT2" \
+    OUT_ROOT="$OUT3" \
+    WORKERS="$PRIVACY_WORKERS" \
+    FACE_MODEL="$PRIVACY_FACE_MODEL" \
+    LP_MODEL="$PRIVACY_LP_MODEL" \
+    FACE_CONF="$PRIVACY_FACE_CONF" \
+    LP_CONF="$PRIVACY_LP_CONF" \
+    FACE_IOU="$PRIVACY_FACE_IOU" \
+    FACE_IMGSZ="$PRIVACY_FACE_IMGSZ" \
+    DET_FACE_W="$PRIVACY_DET_FACE_W" \
+    P360_DEVICE="$PRIVACY_P360_DEVICE" \
+    BLUR_SCOPE="$PRIVACY_BLUR_SCOPE" \
+    BLUR_BACKEND="$PRIVACY_BLUR_BACKEND" \
+    OUTPUT_MODE="$PRIVACY_OUTPUT_MODE" \
+    PYTHON_BIN="$PRIVACY_PYTHON_BIN" \
+    bash "$PRIVACY_RUNNER"
+
     E_EGO=$(date +%s)
     EGOBLUR_SEC=$((E_EGO - S_EGO))
     echo "=== STAGE_END egoblur elapsed_sec=$EGOBLUR_SEC ==="
@@ -605,6 +661,14 @@ TOTAL_SEC=$((END_EPOCH - START_EPOCH))
   echo "laplacian_dilation=$LAPLACIAN_DILATION"
   echo "laplacian_blur=$LAPLACIAN_BLUR"
   echo "laplacian_levels=$LAPLACIAN_LEVELS"
+  echo "privacy_workers=$PRIVACY_WORKERS"
+  echo "privacy_face_model=$PRIVACY_FACE_MODEL"
+  echo "privacy_lp_model=$PRIVACY_LP_MODEL"
+  echo "privacy_face_conf=$PRIVACY_FACE_CONF"
+  echo "privacy_lp_conf=$PRIVACY_LP_CONF"
+  echo "privacy_output_mode=$PRIVACY_OUTPUT_MODE"
+  echo "privacy_blur_scope=$PRIVACY_BLUR_SCOPE"
+  echo "privacy_blur_backend=$PRIVACY_BLUR_BACKEND"
   echo "downstream_mode=$DOWNSTREAM_MODE"
   echo "comfy_stop_containers=$COMFY_STOP_CONTAINERS"
   echo "stop_after_stage=$STOP_AFTER_STAGE"

@@ -26,6 +26,7 @@ HF_TOKEN="${HF_TOKEN:-}"
 MODELS_ROOT="${MODELS_ROOT:-models}"
 COMFY_MODELS_DIR="${COMFY_MODELS_DIR:-$MODELS_ROOT/comfyui}"
 EGOBLUR_MODELS_DIR="${EGOBLUR_MODELS_DIR:-$MODELS_ROOT/egoblur_gen2}"
+PRIVACY_MODELS_DIR="${PRIVACY_MODELS_DIR:-$MODELS_ROOT/privacy_blur}"
 
 # Function to download a model if it doesn't exist
 download_model() {
@@ -120,17 +121,17 @@ download_model \
     "$COMFY_MODELS_DIR/lama/big-lama.pt" \
     "[6b/9] SimpleLama big-lama checkpoint"
 
-# 7. EgoBlur Face Detection Model
+# 7. Privacy blur face model (Ultralytics)
 download_model \
-    "https://huggingface.co/aravgarg588/comfyui-container-model/resolve/main/egoblur_gen2/ego_blur_face_gen2.jit" \
-    "$EGOBLUR_MODELS_DIR/ego_blur_face_gen2.jit" \
-    "[7/9] EgoBlur Face Detection Model"
+    "https://huggingface.co/Bingsu/adetailer/resolve/main/face_yolov8n.pt" \
+    "$PRIVACY_MODELS_DIR/face_yolov8n.pt" \
+    "[7/9] Privacy blur face detector (YOLOv8n)"
 
-# 8. EgoBlur License Plate Detection Model
+# 8. Privacy blur LP model (open-image-models YOLOv9 ONNX)
 download_model \
-    "https://huggingface.co/aravgarg588/comfyui-container-model/resolve/main/egoblur_gen2/ego_blur_lp_gen2.jit" \
-    "$EGOBLUR_MODELS_DIR/ego_blur_lp_gen2.jit" \
-    "[8/9] EgoBlur License Plate Detection Model"
+    "https://github.com/ankandrew/open-image-models/releases/download/assets/yolo-v9-s-608-license-plates-end2end.onnx" \
+    "$PRIVACY_MODELS_DIR/yolo-v9-s-608-license-plates-end2end.onnx" \
+    "[8/9] Privacy blur LP detector (YOLOv9s-608 ONNX)"
 
 # 9. Checkpoints (if needed)
 # Uncomment if you have additional checkpoint models
@@ -160,9 +161,9 @@ echo "  │       ├── tokenizer.json + tokenizer_config.json"
 echo "  │       ├── vocab.json + merges.txt"
 echo "  │       └── special_tokens_map.json"
 echo "  │   └── lama/big-lama.pt"
-echo "  └── egoblur_gen2/"
-echo "      ├── ego_blur_face_gen2.jit"
-echo "      └── ego_blur_lp_gen2.jit"
+echo "  ├── privacy_blur/"
+echo "  │   ├── face_yolov8n.pt"
+echo "  │   └── yolo-v9-s-608-license-plates-end2end.onnx"
 echo ""
 echo "You can now start the Docker container:"
 echo "  docker compose up -d"

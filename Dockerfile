@@ -60,7 +60,7 @@ RUN . /workspace/.venv/bin/activate && \
 
 # Install inpainting workflow dependencies
 RUN . /workspace/.venv/bin/activate && \
-    uv pip install simple-lama-inpainting click requests tqdm egoblur
+    uv pip install simple-lama-inpainting click requests tqdm egoblur ultralytics pytorch360convert "open-image-models[onnx-gpu]"
 
 # Clone EgoBlur Gen2 library (CRITICAL: required by egoblur_infer.py)
 ARG EGOBLUR_REF=main

@@ -212,7 +212,7 @@ def _process_one(task):
 @click.option("--tile-pad", default=20, show_default=True, type=int)
 @click.option("--sky-prompt", default="sky", show_default=True)
 @click.option("--sky-threshold", default=0.5, show_default=True, type=float)
-@click.option("--glare-prompt", default="sun glare", show_default=True)
+@click.option("--glare-prompt", default="sunlight", show_default=True)
 @click.option("--glare-threshold", default=0.4, show_default=True, type=float)
 @click.option("--mask-threshold", default=0.5, show_default=True, type=float)
 @click.option("--square-output/--no-square-output", default=True, show_default=True)

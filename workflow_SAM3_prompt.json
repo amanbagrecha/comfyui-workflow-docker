@@ -103,7 +103,7 @@
   "8": {
     "inputs": {
       "confidence_threshold": 0.4,
-      "text_prompt": "sun glare",
+      "text_prompt": "sunlight",
       "max_detections": -1,
       "offload_model": false,
       "sam3_model": [
@@ -183,7 +183,7 @@
   "13": {
     "inputs": {
       "confidence_threshold": 0.4,
-      "text_prompt": "sun glare",
+      "text_prompt": "sunlight",
       "max_detections": -1,
       "offload_model": false,
       "sam3_model": [

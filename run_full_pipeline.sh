@@ -542,7 +542,11 @@ else
   S_POST=$(date +%s)
   echo "=== STAGE_START postprocess ==="
   if [ "$DOWNSTREAM_MODE" = "inline" ]; then
-    docker exec -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt "$CONTAINER_NAME" python /workspace/inpainting/postprocess.py \
+    docker exec \
+      -u "$(id -u):$(id -g)" \
+      -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt \
+      "$CONTAINER_NAME" \
+      python /workspace/inpainting/postprocess.py \
       -i /workspace/ComfyUI/output/$BATCH_NAME \
       -o /workspace/output-postprocessed/$BATCH_NAME \
       --top-mask /workspace/inpainting/sky_mask_updated.png \
@@ -557,6 +561,7 @@ else
       --rm
       --name "postprocess-${RUN_ID}"
       --gpus "device=${NVIDIA_VISIBLE_DEVICES:-0}"
+      -u "$(id -u):$(id -g)"
       -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt
       -v "$REPO/inpainting-workflow-master:/workspace/inpainting"
       -v "$MODELS_COMFYUI_DIR:/workspace/ComfyUI/models:ro"

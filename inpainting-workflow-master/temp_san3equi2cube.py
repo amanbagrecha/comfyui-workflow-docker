@@ -145,8 +145,7 @@ def main(
                 face_rgb_u8 = np.pad(
                     face_rgb_u8,
                     ((pad, pad), (pad, pad), (0, 0)),
-                    mode="constant",
-                    constant_values=0,
+                    mode="reflect",
                 )
 
             sky = infer_mask(

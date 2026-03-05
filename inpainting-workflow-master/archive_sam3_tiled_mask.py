@@ -8,16 +8,55 @@ from pathlib import Path
 
 import click
 import numpy as np
-import pytorch360convert as p360
 import torch
 from PIL import Image
 from transformers import Sam3Model, Sam3Processor
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp"}
+LANCZOS = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+
 DEFAULT_MODEL_PATH = "/workspace/ComfyUI/models/sam3"
-PREDICT_FACES = ("Front", "Right", "Back", "Left", "Up")
-ALL_FACES = ("Front", "Right", "Back", "Left", "Up", "Down")
+
+
+def _pad_to_tile_grid(rgb_u8, rows, cols):
+    h, w = rgb_u8.shape[:2]
+    pad_right = (cols - (w % cols)) % cols
+    pad_bottom = (rows - (h % rows)) % rows
+    if pad_right == 0 and pad_bottom == 0:
+        return rgb_u8, 0, 0
+    return (
+        np.pad(rgb_u8, ((0, pad_bottom), (0, pad_right), (0, 0)), mode="edge"),
+        pad_right,
+        pad_bottom,
+    )
+
+
+def _tile_windows(width, height, rows, cols, overlap_ratio, overlap_x, overlap_y):
+    tile_h = height // rows
+    tile_w = width // cols
+    overlap_h = min(tile_h // 2, int(tile_h * overlap_ratio) + overlap_y)
+    overlap_w = min(tile_w // 2, int(tile_w * overlap_ratio) + overlap_x)
+    if rows == 1:
+        overlap_h = 0
+    if cols == 1:
+        overlap_w = 0
+
+    windows = []
+    for i in range(rows):
+        for j in range(cols):
+            y1 = i * tile_h - (overlap_h if i > 0 else 0)
+            x1 = j * tile_w - (overlap_w if j > 0 else 0)
+            y2 = y1 + tile_h + overlap_h
+            x2 = x1 + tile_w + overlap_w
+            if y2 > height:
+                y2 = height
+                y1 = y2 - tile_h - overlap_h
+            if x2 > width:
+                x2 = width
+                x1 = x2 - tile_w - overlap_w
+            windows.append((x1, y1, x2, y2))
+    return windows
 
 
 def _pad_mask_to_square(mask_u8):
@@ -45,30 +84,23 @@ def _worker_init(cfg):
     _MODEL.eval()
 
 
-def _infer_mask(tile_rgb_u8, prompt, threshold):
-    h, w = tile_rgb_u8.shape[:2]
-    tile_pil = Image.fromarray(tile_rgb_u8, mode="RGB")
+def _infer_mask(tile_pil, prompt, threshold):
+    h, w = tile_pil.size[1], tile_pil.size[0]
     inputs = _PROCESSOR(images=tile_pil, text=prompt.strip(), return_tensors="pt").to(
         _CFG["device"]
     )
     with torch.no_grad():
         outputs = _MODEL(**inputs)
-
-    result = _PROCESSOR.post_process_instance_segmentation(
+    results = _PROCESSOR.post_process_instance_segmentation(
         outputs,
         threshold=threshold,
         mask_threshold=_CFG["mask_threshold"],
         target_sizes=inputs.get("original_sizes").tolist(),
     )[0]
-    masks = result.get("masks")
+    masks = results.get("masks")
     if masks is None or len(masks) == 0:
         return np.zeros((h, w), dtype=np.float32)
     return torch.stack(list(masks)).float().amax(dim=0).cpu().numpy()
-
-
-def _tensor_chw_to_rgb_u8(t):
-    arr = t.detach().cpu().permute(1, 2, 0).float().numpy()
-    return np.clip(arr * 255.0, 0, 255).astype(np.uint8)
 
 
 def _process_one(task):
@@ -76,68 +108,65 @@ def _process_one(task):
     t0 = time.perf_counter()
     cfg = _CFG
 
-    rgb_u8 = np.array(Image.open(in_path).convert("RGB"), dtype=np.uint8, copy=True)
-    h, w = rgb_u8.shape[:2]
+    rgb_u8 = np.asarray(Image.open(in_path).convert("RGB"), dtype=np.uint8)
+    if cfg["resize_width"] > 0 and cfg["resize_height"] > 0:
+        rgb_u8 = np.asarray(
+            Image.fromarray(rgb_u8).resize(
+                (cfg["resize_width"], cfg["resize_height"]), LANCZOS
+            ),
+            dtype=np.uint8,
+        )
 
-    equi_t = torch.from_numpy(rgb_u8).permute(2, 0, 1).float().to(cfg["device"]) / 255.0
-    cube_dict = p360.e2c(
-        equi_t,
-        face_w=cfg["face_size"],
-        mode="bilinear",
-        cube_format="dict",
-        channels_first=True,
+    rgb_u8, pad_right, pad_bottom = _pad_to_tile_grid(
+        rgb_u8, cfg["tile_rows"], cfg["tile_cols"]
+    )
+    h, w = rgb_u8.shape[:2]
+    windows = _tile_windows(
+        w,
+        h,
+        cfg["tile_rows"],
+        cfg["tile_cols"],
+        cfg["overlap_ratio"],
+        cfg["overlap_x"],
+        cfg["overlap_y"],
     )
 
-    mask_cube = {
-        face: torch.zeros(
-            (1, cfg["face_size"], cfg["face_size"]),
-            dtype=torch.float32,
-            device=cfg["device"],
-        )
-        for face in ALL_FACES
-    }
-
-    for face in PREDICT_FACES:
-        face_rgb_u8 = _tensor_chw_to_rgb_u8(cube_dict[face])
-
-        if cfg["tile_pad"] > 0:
-            face_rgb_u8 = np.pad(
-                face_rgb_u8,
-                (
-                    (cfg["tile_pad"], cfg["tile_pad"]),
-                    (cfg["tile_pad"], cfg["tile_pad"]),
-                    (0, 0),
-                ),
-                mode="reflect",
+    stitched = np.zeros((h, w), dtype=np.float32)
+    for x1, y1, x2, y2 in windows:
+        tile_u8 = rgb_u8[y1:y2, x1:x2]
+        tile_pad = max(0, int(cfg["tile_pad"]))
+        if tile_pad > 0:
+            tile_u8 = np.pad(
+                tile_u8,
+                ((tile_pad, tile_pad), (tile_pad, tile_pad), (0, 0)),
+                mode="constant",
+                constant_values=0,
             )
 
-        sky = _infer_mask(face_rgb_u8, cfg["sky_prompt"], cfg["sky_threshold"])
-        glare = _infer_mask(face_rgb_u8, cfg["glare_prompt"], cfg["glare_threshold"])
-        combined = np.maximum(sky, glare)
+        tile_pil = Image.fromarray(tile_u8, mode="RGB")
+        sky = _infer_mask(tile_pil, cfg["sky_prompt"], cfg["sky_threshold"])
+        glare = _infer_mask(tile_pil, cfg["glare_prompt"], cfg["glare_threshold"])
 
-        if cfg["tile_pad"] > 0:
-            p = cfg["tile_pad"]
-            combined = combined[p:-p, p:-p]
+        if tile_pad > 0:
+            sky = sky[tile_pad:-tile_pad, tile_pad:-tile_pad]
+            glare = glare[tile_pad:-tile_pad, tile_pad:-tile_pad]
 
-        combined = (combined >= cfg["mask_threshold"]).astype(np.float32)
-        mask_cube[face] = torch.from_numpy(combined).to(cfg["device"]).unsqueeze(0)
+        tile_mask = np.maximum(sky, glare)
+        stitched[y1:y2, x1:x2] = np.maximum(
+            stitched[y1:y2, x1:x2], tile_mask[: y2 - y1, : x2 - x1]
+        )
 
-    eq_mask_t = p360.c2e(
-        mask_cube,
-        h=h,
-        w=w,
-        mode="bilinear",
-        cube_format="dict",
-        channels_first=True,
-    )
+    if pad_bottom > 0:
+        stitched = stitched[:-pad_bottom, :]
+    if pad_right > 0:
+        stitched = stitched[:, :-pad_right]
 
-    eq_mask = eq_mask_t.squeeze(0).detach().cpu().numpy()
-    eq_mask_u8 = (eq_mask >= cfg["mask_threshold"]).astype(np.uint8) * 255
+    stitched = (stitched >= cfg["mask_threshold"]).astype(np.uint8) * 255
     if cfg["square_output"]:
-        eq_mask_u8 = _pad_mask_to_square(eq_mask_u8)
+        stitched = _pad_mask_to_square(stitched)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(eq_mask_u8, mode="L").save(out_path)
+    Image.fromarray(stitched, mode="L").save(out_path)
     return {
         "input": str(in_path),
         "output": str(out_path),
@@ -159,7 +188,7 @@ def _process_one(task):
 @click.option("--pattern", default="*.jpg", show_default=True)
 @click.option("--recursive/--no-recursive", default=True, show_default=True)
 @click.option("--skip-existing/--no-skip-existing", default=True, show_default=True)
-@click.option("-j", "--workers", default=4, show_default=True, type=int)
+@click.option("-j", "--workers", default=1, show_default=True, type=int)
 @click.option(
     "--model-path",
     default=DEFAULT_MODEL_PATH,
@@ -173,15 +202,14 @@ def _process_one(task):
     show_default=True,
     type=click.Choice(["auto", "cuda", "cpu"]),
 )
-@click.option("--resize-width", default=0, show_default=True, type=int)
-@click.option("--resize-height", default=0, show_default=True, type=int)
+@click.option("--resize-width", default=2000, show_default=True, type=int)
+@click.option("--resize-height", default=1000, show_default=True, type=int)
 @click.option("--tile-rows", default=1, show_default=True, type=int)
 @click.option("--tile-cols", default=2, show_default=True, type=int)
 @click.option("--overlap", "overlap_ratio", default=0.0, show_default=True, type=float)
 @click.option("--overlap-x", default=30, show_default=True, type=int)
 @click.option("--overlap-y", default=0, show_default=True, type=int)
 @click.option("--tile-pad", default=20, show_default=True, type=int)
-@click.option("--face-size", default=1000, show_default=True, type=int)
 @click.option("--sky-prompt", default="sky", show_default=True)
 @click.option("--sky-threshold", default=0.5, show_default=True, type=float)
 @click.option("--glare-prompt", default="sunlight", show_default=True)
@@ -205,7 +233,6 @@ def main(
     overlap_x,
     overlap_y,
     tile_pad,
-    face_size,
     sky_prompt,
     sky_threshold,
     glare_prompt,
@@ -243,16 +270,17 @@ def main(
         click.echo("No work to do (all outputs already exist).")
         return
 
-    if resize_width > 0 or resize_height > 0:
-        click.echo(
-            f"NOTE: --resize-width/--resize-height are deprecated and ignored (requested {resize_width}x{resize_height})."
-        )
-
     cfg = dict(
         model_path=model_path,
         device=device,
-        face_size=face_size,
-        tile_pad=max(0, int(tile_pad)),
+        resize_width=resize_width,
+        resize_height=resize_height,
+        tile_rows=tile_rows,
+        tile_cols=tile_cols,
+        overlap_ratio=overlap_ratio,
+        overlap_x=overlap_x,
+        overlap_y=overlap_y,
+        tile_pad=tile_pad,
         sky_prompt=sky_prompt,
         sky_threshold=sky_threshold,
         glare_prompt=glare_prompt,
@@ -262,10 +290,10 @@ def main(
     )
 
     click.echo(
-        f"SAM3 cube mask: input={len(in_files)} pending={len(tasks)} workers={workers} device={device} face_size={face_size}"
+        f"SAM3 tiled mask: input={len(in_files)} pending={len(tasks)} workers={workers} device={device}"
     )
     click.echo(
-        f"tile-compat rows={tile_rows} cols={tile_cols} overlap=({overlap_x},{overlap_y}) overlap_ratio={overlap_ratio} pad={tile_pad} sky='{sky_prompt}'({sky_threshold}) glare='{glare_prompt}'({glare_threshold})"
+        f"resize={resize_width}x{resize_height} tiles={tile_rows}x{tile_cols} overlap=({overlap_x},{overlap_y}) tile_pad={tile_pad} sky='{sky_prompt}'({sky_threshold}) glare='{glare_prompt}'({glare_threshold})"
     )
 
     results, failures = [], []

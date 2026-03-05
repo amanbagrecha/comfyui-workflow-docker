@@ -19,6 +19,8 @@ Environment variables:
   WAIT_POLL_SEC             Optional. Default: 10
   FINAL_OUTPUT_DIR          Optional. If set, writes per-shard outputs under
                             FINAL_OUTPUT_DIR/<RUN_NAME>/gpu<id>/
+  STRICT_HARDLINK           Optional. 1 = fail when hardlink is not possible.
+                            0 = allow copy fallback. Default: 1.
   DRY_RUN                   Optional. 1 = prepare/print plan only, no launches.
   SINGLE_GPU_CONFLICT_MODE  Optional. off|warn|stop. Default: warn.
                             Applies only when NUM_GPUS=1. Detects other running
@@ -26,7 +28,7 @@ Environment variables:
 
 Forwarded to each shard run_full_pipeline.sh invocation (per GPU):
   MODELS_ROOT, MODELS_COMFYUI_DIR, MODELS_EGOBLUR_DIR, MODELS_PRIVACY_DIR,
-  AUTO_DOWNLOAD_MODELS, FORCE_REPROCESS,
+  AUTO_DOWNLOAD_MODELS, FORCE_REPROCESS, STRICT_HARDLINK,
   SAM3_WORKERS, POSTPROCESS_WORKERS, EGOBLUR_WORKERS,
   PRIVACY_WORKERS, PRIVACY_FACE_MODEL, PRIVACY_LP_MODEL,
   PRIVACY_FACE_CONF, PRIVACY_LP_CONF, PRIVACY_FACE_IOU, PRIVACY_FACE_IMGSZ,
@@ -76,6 +78,7 @@ WORK_ROOT="${WORK_ROOT:-$REPO/tmp/multigpu/$RUN_NAME}"
 WAIT_POLL_SEC="${WAIT_POLL_SEC:-10}"
 DRY_RUN="${DRY_RUN:-0}"
 SINGLE_GPU_CONFLICT_MODE="${SINGLE_GPU_CONFLICT_MODE:-warn}"
+STRICT_HARDLINK="${STRICT_HARDLINK:-1}"
 
 DOWNSTREAM_MODE="${DOWNSTREAM_MODE:-isolated}"
 STOP_AFTER_STAGE="${STOP_AFTER_STAGE:-egoblur}"
@@ -92,6 +95,11 @@ fi
 
 if [[ "$SINGLE_GPU_CONFLICT_MODE" != "off" && "$SINGLE_GPU_CONFLICT_MODE" != "warn" && "$SINGLE_GPU_CONFLICT_MODE" != "stop" ]]; then
   echo "ERROR: SINGLE_GPU_CONFLICT_MODE must be one of: off|warn|stop"
+  exit 1
+fi
+
+if [[ "$STRICT_HARDLINK" != "0" && "$STRICT_HARDLINK" != "1" ]]; then
+  echo "ERROR: STRICT_HARDLINK must be 0 or 1"
   exit 1
 fi
 
@@ -173,7 +181,7 @@ mkdir -p "$WORK_ROOT/shards" "$WORK_ROOT/jobs" "$REPO/logs"
 MANIFEST_JSON="$WORK_ROOT/shard_manifest.json"
 COUNT_JSON="$WORK_ROOT/shard_counts.json"
 
-python3 - <<'PY' "$SRC" "$WORK_ROOT/shards" "$NUM_GPUS" "$MANIFEST_JSON" "$COUNT_JSON"
+python3 - <<'PY' "$SRC" "$WORK_ROOT/shards" "$NUM_GPUS" "$MANIFEST_JSON" "$COUNT_JSON" "$STRICT_HARDLINK"
 import json
 import shutil
 import sys
@@ -184,6 +192,7 @@ shards_root = Path(sys.argv[2]).resolve()
 num_gpus = int(sys.argv[3])
 manifest_path = Path(sys.argv[4]).resolve()
 count_path = Path(sys.argv[5]).resolve()
+strict_hardlink = sys.argv[6] == "1"
 
 exts = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp"}
 files = [p for p in sorted(src.iterdir()) if p.is_file() and p.suffix.lower() in exts]
@@ -212,7 +221,11 @@ for idx, src_file in enumerate(files):
 
     try:
         dst.hardlink_to(src_file)
-    except OSError:
+    except OSError as exc:
+        if strict_hardlink:
+            raise SystemExit(
+                f"Hardlink failed (STRICT_HARDLINK=1): {src_file} -> {dst}: {exc}"
+            )
         shutil.copy2(src_file, dst)
 
     manifest.append(
@@ -241,6 +254,7 @@ echo "GPU_IDS=${GPU_LIST[*]}"
 echo "WORK_ROOT=$WORK_ROOT"
 echo "DOWNSTREAM_MODE=$DOWNSTREAM_MODE"
 echo "STOP_AFTER_STAGE=$STOP_AFTER_STAGE"
+echo "STRICT_HARDLINK=$STRICT_HARDLINK"
 echo "DRY_RUN=$DRY_RUN"
 echo "SINGLE_GPU_CONFLICT_MODE=$SINGLE_GPU_CONFLICT_MODE"
 
@@ -300,6 +314,7 @@ export MODELS_EGOBLUR_DIR="${MODELS_EGOBLUR_DIR:-${MODELS_ROOT:-$REPO/models}/eg
 export MODELS_PRIVACY_DIR="${MODELS_PRIVACY_DIR:-${MODELS_ROOT:-$REPO/models}/privacy_blur}"
 export AUTO_DOWNLOAD_MODELS="${AUTO_DOWNLOAD_MODELS:-1}"
 export FORCE_REPROCESS="${FORCE_REPROCESS:-0}"
+export STRICT_HARDLINK="${STRICT_HARDLINK:-1}"
 export PRIVACY_WORKERS="${PRIVACY_WORKERS:-2}"
 export PRIVACY_FACE_MODEL="${PRIVACY_FACE_MODEL:-${MODELS_PRIVACY_DIR:-${MODELS_ROOT:-$REPO/models}/privacy_blur}/face_yolov8n.pt}"
 export PRIVACY_LP_MODEL="${PRIVACY_LP_MODEL:-${MODELS_PRIVACY_DIR:-${MODELS_ROOT:-$REPO/models}/privacy_blur}/yolo-v9-s-608-license-plates-end2end.onnx}"
@@ -447,13 +462,14 @@ if [[ -n "${FINAL_OUTPUT_DIR:-}" ]]; then
     dst_dir="$MERGED_ROOT/gpu${gpu_id}"
     mkdir -p "$dst_dir"
 
-    python3 - <<'PY' "$src_dir" "$dst_dir"
+    python3 - <<'PY' "$src_dir" "$dst_dir" "$STRICT_HARDLINK"
 import shutil
 import sys
 from pathlib import Path
 
 src = Path(sys.argv[1])
 dst = Path(sys.argv[2])
+strict_hardlink = sys.argv[3] == "1"
 if not src.exists():
     raise SystemExit(0)
 
@@ -467,7 +483,11 @@ for p in src.rglob('*'):
         target.unlink()
     try:
         target.hardlink_to(p)
-    except OSError:
+    except OSError as exc:
+        if strict_hardlink:
+            raise SystemExit(
+                f"Hardlink failed (STRICT_HARDLINK=1): {p} -> {target}: {exc}"
+            )
         shutil.copy2(p, target)
 PY
 

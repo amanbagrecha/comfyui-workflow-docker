@@ -23,6 +23,12 @@ BLUR_BACKEND="${BLUR_BACKEND:-gpu}"
 OUTPUT_MODE="${OUTPUT_MODE:-blur_only}"
 JPG_QUALITY="${JPG_QUALITY:-85}"
 PYTHON_BIN="${PYTHON_BIN:-/data/.venv/bin/python}"
+STRICT_HARDLINK="${STRICT_HARDLINK:-1}"
+
+if [[ "$STRICT_HARDLINK" != "0" && "$STRICT_HARDLINK" != "1" ]]; then
+  echo "ERROR: STRICT_HARDLINK must be 0 or 1"
+  exit 1
+fi
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
   if command -v python3 >/dev/null 2>&1; then
@@ -39,7 +45,7 @@ OUT_ROOT="${OUT_ROOT:-$REPO/comfyui_data/final_outputs/$RUN_NAME/gpu0}"
 
 mkdir -p "$WORK_ROOT/shards" "$WORK_ROOT/worker_outputs" "$LOG_ROOT" "$OUT_ROOT"
 
-python3 - <<'PY' "$SRC" "$WORK_ROOT/shards" "$WORKERS"
+python3 - <<'PY' "$SRC" "$WORK_ROOT/shards" "$WORKERS" "$STRICT_HARDLINK"
 from pathlib import Path
 import shutil
 import sys
@@ -47,6 +53,7 @@ import sys
 src = Path(sys.argv[1])
 shards = Path(sys.argv[2])
 workers = int(sys.argv[3])
+strict_hardlink = sys.argv[4] == '1'
 exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 
 images = [p for p in sorted(src.iterdir()) if p.is_file() and p.suffix.lower() in exts]
@@ -64,7 +71,11 @@ for idx, img in enumerate(images):
     dst = shards / f"w{wi}" / img.name
     try:
         dst.hardlink_to(img)
-    except OSError:
+    except OSError as exc:
+        if strict_hardlink:
+            raise SystemExit(
+                f"Hardlink failed (STRICT_HARDLINK=1): {img} -> {dst}: {exc}"
+            )
         shutil.copy2(img, dst)
 
 for i in range(workers):
@@ -149,7 +160,7 @@ if [[ "$FAIL" -ne 0 ]]; then
   exit 1
 fi
 
-python3 - <<'PY' "$WORK_ROOT/worker_outputs" "$OUT_ROOT" "$OUTPUT_MODE"
+python3 - <<'PY' "$WORK_ROOT/worker_outputs" "$OUT_ROOT" "$OUTPUT_MODE" "$STRICT_HARDLINK"
 from pathlib import Path
 import csv
 import shutil
@@ -158,6 +169,7 @@ import sys
 src_root = Path(sys.argv[1])
 dst_root = Path(sys.argv[2])
 output_mode = sys.argv[3]
+strict_hardlink = sys.argv[4] == '1'
 dst_root.mkdir(parents=True, exist_ok=True)
 
 summary_rows = []
@@ -170,7 +182,11 @@ for wdir in sorted(src_root.glob('w*')):
             target.unlink()
         try:
             target.hardlink_to(p)
-        except OSError:
+        except OSError as exc:
+            if strict_hardlink:
+                raise SystemExit(
+                    f"Hardlink failed (STRICT_HARDLINK=1): {p} -> {target}: {exc}"
+                )
             shutil.copy2(p, target)
 
     if output_mode == 'both':
@@ -180,7 +196,11 @@ for wdir in sorted(src_root.glob('w*')):
                 target.unlink()
             try:
                 target.hardlink_to(p)
-            except OSError:
+            except OSError as exc:
+                if strict_hardlink:
+                    raise SystemExit(
+                        f"Hardlink failed (STRICT_HARDLINK=1): {p} -> {target}: {exc}"
+                    )
                 shutil.copy2(p, target)
 
     summ = wdir / 'summary.csv'

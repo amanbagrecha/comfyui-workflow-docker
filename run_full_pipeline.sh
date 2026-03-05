@@ -43,6 +43,7 @@ COMFY_READY_TIMEOUT="${COMFY_READY_TIMEOUT:-300}"
 COMFY_READY_POLL="${COMFY_READY_POLL:-2}"
 RESET_CONTAINER_BEFORE_RUN="${RESET_CONTAINER_BEFORE_RUN:-1}"
 FORCE_REPROCESS="${FORCE_REPROCESS:-0}"
+STRICT_HARDLINK="${STRICT_HARDLINK:-1}"
 AUTO_INSTALL_NVIDIA_TOOLKIT="${AUTO_INSTALL_NVIDIA_TOOLKIT:-1}"
 NVIDIA_CUDA_TEST_IMAGE="${NVIDIA_CUDA_TEST_IMAGE:-nvidia/cuda:12.6.0-base-ubuntu22.04}"
 RUN_ID="$(date +%Y%m%d_%H%M%S)_${CONTAINER_NAME}_$$"
@@ -67,6 +68,7 @@ echo "COMFYUI_DATA_DIR=$COMFYUI_DATA_DIR"
 echo "NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-unset}"
 echo "COMFY_PORT=${COMFY_PORT:-8188}"
 echo "FORCE_REPROCESS=$FORCE_REPROCESS"
+echo "STRICT_HARDLINK=$STRICT_HARDLINK"
 echo "AUTO_INSTALL_NVIDIA_TOOLKIT=$AUTO_INSTALL_NVIDIA_TOOLKIT"
 echo "POSTPROCESS_WORKERS=$POSTPROCESS_WORKERS"
 echo "EGOBLUR_WORKERS=$EGOBLUR_WORKERS"
@@ -117,6 +119,11 @@ fi
 
 if [[ "$RESET_CONTAINER_BEFORE_RUN" != "0" && "$RESET_CONTAINER_BEFORE_RUN" != "1" ]]; then
   echo "ERROR: RESET_CONTAINER_BEFORE_RUN must be 0 or 1"
+  exit 1
+fi
+
+if [[ "$STRICT_HARDLINK" != "0" && "$STRICT_HARDLINK" != "1" ]]; then
+  echo "ERROR: STRICT_HARDLINK must be 0 or 1"
   exit 1
 fi
 
@@ -412,19 +419,39 @@ if [ "$USE_STAGED_INPUT" = "1" ]; then
   echo "=== STAGE_START hardlink_stage ==="
   export SRC DST
   python3 - <<'PY'
+import shutil
 import os
 from pathlib import Path
 
 src = Path(os.environ["SRC"])
 dst = Path(os.environ["DST"])
+strict_hardlink = os.environ.get("STRICT_HARDLINK", "1") == "1"
 exts = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
 
 images = [p for p in sorted(src.iterdir()) if p.is_file() and p.suffix.lower() in exts]
 for image in images:
+    target = dst / image.name
+    if target.exists():
+        src_stat = image.stat()
+        dst_stat = target.stat()
+        same_inode = src_stat.st_dev == dst_stat.st_dev and src_stat.st_ino == dst_stat.st_ino
+        if same_inode:
+            continue
+        if strict_hardlink:
+            raise SystemExit(
+                f"Hardlink requirement failed (STRICT_HARDLINK=1): existing target is not a hardlink: {target}"
+            )
+        shutil.copy2(image, target)
+        continue
+
     try:
-        (dst / image.name).hardlink_to(image)
-    except OSError:
-        (dst / image.name).write_bytes(image.read_bytes())
+        target.hardlink_to(image)
+    except OSError as exc:
+        if strict_hardlink:
+            raise SystemExit(
+                f"Hardlink failed (STRICT_HARDLINK=1): {image} -> {target}: {exc}"
+            )
+        shutil.copy2(image, target)
 
 print(f"staged_images={len(images)}")
 PY
@@ -584,6 +611,7 @@ else
     BLUR_BACKEND="$PRIVACY_BLUR_BACKEND" \
     OUTPUT_MODE="$PRIVACY_OUTPUT_MODE" \
     PYTHON_BIN="$PRIVACY_PYTHON_BIN" \
+    STRICT_HARDLINK="$STRICT_HARDLINK" \
     bash "$PRIVACY_RUNNER"
 
     E_EGO=$(date +%s)
@@ -595,7 +623,7 @@ fi
 if [ -n "$FINAL_OUTPUT_DIR" ] && [ "$STOP_AFTER_STAGE" = "egoblur" ]; then
   FINAL_BATCH_DIR="$FINAL_OUTPUT_DIR/$BATCH_NAME"
   mkdir -p "$FINAL_BATCH_DIR"
-  export OUT3 FINAL_BATCH_DIR
+  export OUT3 FINAL_BATCH_DIR STRICT_HARDLINK
   python3 - <<'PY'
 import os
 import shutil
@@ -603,6 +631,7 @@ from pathlib import Path
 
 src = Path(os.environ["OUT3"])
 dst = Path(os.environ["FINAL_BATCH_DIR"])
+strict_hardlink = os.environ.get("STRICT_HARDLINK", "1") == "1"
 for file in src.iterdir():
     if not file.is_file():
         continue
@@ -611,7 +640,11 @@ for file in src.iterdir():
         if target.exists():
             target.unlink()
         target.hardlink_to(file)
-    except OSError:
+    except OSError as exc:
+        if strict_hardlink:
+            raise SystemExit(
+                f"Hardlink failed (STRICT_HARDLINK=1): {file} -> {target}: {exc}"
+            )
         shutil.copy2(file, target)
 
 print(f"final_output_written={dst}")
@@ -672,6 +705,7 @@ TOTAL_SEC=$((END_EPOCH - START_EPOCH))
   echo "downstream_mode=$DOWNSTREAM_MODE"
   echo "comfy_stop_containers=$COMFY_STOP_CONTAINERS"
   echo "stop_after_stage=$STOP_AFTER_STAGE"
+  echo "strict_hardlink=$STRICT_HARDLINK"
   echo "batch_name=$BATCH_NAME"
   echo "input_mode_requested=$INPUT_MODE"
   echo "input_mode_resolved=$RESOLVED_INPUT_MODE"

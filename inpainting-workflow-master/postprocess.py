@@ -27,16 +27,24 @@ def _load_p2e_and_blend_torch():
     except Exception:
         import importlib.util
 
-        fallback_nodes = Path("/workspace/ComfyUI/custom_nodes/p2e/nodes.py")
-        if not fallback_nodes.exists():
+        fallback_nodes = [
+            Path("/workspace/ComfyUI/custom_nodes/p2e/nodes.py"),
+            Path(__file__).resolve().parents[1] / "p2e-local" / "nodes.py",
+        ]
+        chosen_nodes = None
+        for cand in fallback_nodes:
+            if cand.exists():
+                chosen_nodes = cand
+                break
+        if chosen_nodes is None:
             raise
 
         spec = importlib.util.spec_from_file_location(
-            "p2e_nodes_fallback", str(fallback_nodes)
+            "p2e_nodes_fallback", str(chosen_nodes)
         )
         if spec is None or spec.loader is None:
             raise RuntimeError(
-                f"Unable to load fallback p2e module from {fallback_nodes}"
+                f"Unable to load fallback p2e module from {chosen_nodes}"
             )
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -158,6 +166,7 @@ def _mask_tensor_from_u8(mask_u8: np.ndarray, device: str, dtype: torch.dtype):
 def gaussian_blur_t(t: torch.Tensor, radius: float):
     if radius < 0.5:
         return t
+
     k = int(radius) * 2 + 1
     sigma = float(radius)
     ax = torch.arange(k, dtype=torch.float32, device=t.device) - (k - 1) / 2.0
@@ -254,21 +263,6 @@ def threshold_mask(mask_u8: np.ndarray, threshold: int = 127):
     return (mask_u8 >= threshold).astype(np.uint8) * 255
 
 
-def compute_mask_bbox(mask_u8: np.ndarray, pad: int):
-    ys, xs = np.where(mask_u8 > 0)
-    if ys.size == 0 or xs.size == 0:
-        return None
-
-    h, w = mask_u8.shape[:2]
-    y0 = max(0, int(ys.min()) - pad)
-    y1 = min(h, int(ys.max()) + pad + 1)
-    x0 = max(0, int(xs.min()) - pad)
-    x1 = min(w, int(xs.max()) + pad + 1)
-    if y1 <= y0 or x1 <= x0:
-        return None
-    return y0, y1, x0, x1
-
-
 def laplacian_sky_replace(
     base_rgb_u8: np.ndarray,
     sky_rgb_u8: np.ndarray,
@@ -276,7 +270,6 @@ def laplacian_sky_replace(
     dilation: int,
     blur_radius: int,
     levels: int,
-    roi_pad: int,
     use_fp16: bool,
 ):
     if base_rgb_u8.shape[:2] != sky_rgb_u8.shape[:2]:
@@ -288,29 +281,15 @@ def laplacian_sky_replace(
     mask_oriented, _ = orient_mask_to_sky(mask_aligned)
     mask_bin = threshold_mask(mask_oriented, threshold=127)
 
-    dynamic_pad = max(roi_pad, int(2 * blur_radius + 2 * dilation + 16))
-    bbox = compute_mask_bbox(mask_bin, pad=max(0, dynamic_pad))
-    if bbox is None:
+    if not np.any(mask_bin):
         return base_rgb_u8
-
-    y0, y1, x0, x1 = bbox
-    roi_area = (y1 - y0) * (x1 - x0)
-    if roi_area < h * w:
-        base_work = base_rgb_u8[y0:y1, x0:x1, :]
-        sky_work = sky_rgb_u8[y0:y1, x0:x1, :]
-        mask_work = mask_bin[y0:y1, x0:x1]
-    else:
-        base_work = base_rgb_u8
-        sky_work = sky_rgb_u8
-        mask_work = mask_bin
-        y0, x0 = 0, 0
-        y1, x1 = h, w
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.float16 if (use_fp16 and device == "cuda") else torch.float32
-    base_t = _pil_tensor_from_rgb(base_work, device, dtype)
-    sky_t = _pil_tensor_from_rgb(sky_work, device, dtype)
-    mask_t = _mask_tensor_from_u8(mask_work, device, dtype)
+
+    base_t = _pil_tensor_from_rgb(base_rgb_u8, device, dtype)
+    sky_t = _pil_tensor_from_rgb(sky_rgb_u8, device, dtype)
+    mask_t = _mask_tensor_from_u8(mask_bin, device, dtype)
 
     blend_mask = dilate_t(mask_t, max(0, int(dilation)))
     blend_mask = gaussian_blur_t(blend_mask, radius=max(0, int(blur_radius))).clamp(
@@ -328,21 +307,14 @@ def laplacian_sky_replace(
 
     lp_base = build_lap_pyr(gp_base)
     lp_sky = build_lap_pyr(gp_sky)
-
-    lp_blend = []
-    for lb, ls, gm in zip(lp_base, lp_sky, gp_mask):
-        lp_blend.append(ls * gm + lb * (1.0 - gm))
+    lp_blend = [
+        ls * gm + lb * (1.0 - gm) for lb, ls, gm in zip(lp_base, lp_sky, gp_mask)
+    ]
 
     result_t = collapse_lap_pyr(lp_blend).clamp(0, 1)
-    result_roi = (
-        result_t.squeeze(0).permute(1, 2, 0).detach().cpu().numpy() * 255.0
-    ).astype(np.uint8)
-    if y0 == 0 and x0 == 0 and y1 == h and x1 == w:
-        return result_roi
-
-    out = base_rgb_u8.copy()
-    out[y0:y1, x0:x1, :] = result_roi
-    return out
+    return (result_t.squeeze(0).permute(1, 2, 0).detach().cpu().numpy() * 255.0).astype(
+        np.uint8
+    )
 
 
 def read_rgb(path: Path):
@@ -534,7 +506,6 @@ def process_one(
     dilation: int,
     blur_radius: int,
     levels: int,
-    roi_pad: int,
     laplacian_fp16: bool,
     jpeg_quality: int,
 ):
@@ -552,7 +523,6 @@ def process_one(
             dilation=dilation,
             blur_radius=blur_radius,
             levels=levels,
-            roi_pad=roi_pad,
             use_fp16=laplacian_fp16,
         )
 
@@ -618,7 +588,7 @@ def process_one(
     default=96,
     show_default=True,
     type=int,
-    help="Extra ROI padding (pixels) around SAM3 mask before Laplacian blend",
+    help="Deprecated; unused in full-image Laplacian blend mode",
 )
 @click.option(
     "--laplacian-fp16/--no-laplacian-fp16",
@@ -731,9 +701,6 @@ def main(
         raise click.ClickException("blur must be >= 0")
     if levels < 0:
         raise click.ClickException("levels must be >= 0")
-    if laplacian_roi_pad < 0:
-        raise click.ClickException("laplacian-roi-pad must be >= 0")
-
     output_dir.mkdir(parents=True, exist_ok=True)
 
     in_files, in_root = _iter_input_files(input_path, pattern, recursive)
@@ -770,7 +737,7 @@ def main(
     if mode == "laplacian":
         click.echo(
             f"laplacian: dilation={dilation} blur={blur_radius} levels={levels} "
-            f"roi_pad={laplacian_roi_pad} fp16={laplacian_fp16} "
+            f"fp16={laplacian_fp16} "
             f"carremoved_suffix='{carremoved_suffix}' newsky_suffix='{newsky_suffix}'"
         )
 
@@ -803,7 +770,6 @@ def main(
                     dilation,
                     blur_radius,
                     levels,
-                    laplacian_roi_pad,
                     laplacian_fp16,
                     jpeg_quality,
                 )
@@ -838,7 +804,6 @@ def main(
                     dilation,
                     blur_radius,
                     levels,
-                    laplacian_roi_pad,
                     laplacian_fp16,
                     jpeg_quality,
                 ): (in_p, out_p)

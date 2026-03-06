@@ -100,7 +100,7 @@ The script will download:
 
 ### Step 3: Run Multi-GPU Pipeline (one command, recommended entry point)
 
-`run_multi_gpu_pipeline.sh` is the primary entry point. It auto-shards one large `SRC`, launches one tmux job per GPU, and each shard run auto-creates local directories, auto-copies `perspective_mask.png` into `$COMFYUI_DATA_DIR/input/`, auto-starts Docker (if needed), and can auto-download models if missing.
+`run_multi_gpu_pipeline.sh` is the primary entry point. It auto-shards one large `SRC`, launches one tmux job per GPU, and each shard run auto-creates local directories, auto-copies `perspective_mask.png` into `$COMFYUI_DATA_DIR/input/`, auto-stages `chrome_xWUjmfs7m4.png` from `inpainting-workflow-master/reference_sky.png`, auto-starts Docker (if needed), and can auto-download models if missing.
 
 ```bash
 SRC="/absolute/path/to/your/input_images" \
@@ -126,11 +126,20 @@ Default values:
 | EGOBLUR_WORKERS | 4 (legacy) |
 | PRIVACY_WORKERS | 2 |
 | SAM3_WORKERS | 4 |
+| SAM3_GLARE_THRESHOLD | 0.4 |
+| SAM3_TILE_ROWS | 1 |
+| SAM3_TILE_COLS | 2 |
+| SAM3_SCRIPT | sam3_tiled_mask.py |
 | DOWNSTREAM_MODE | isolated |
 | STOP_AFTER_STAGE | egoblur |
 | FORCE_REPROCESS | 0 |
 | AUTO_DOWNLOAD_MODELS | 1 |
 | RESET_CONTAINER_BEFORE_RUN | 1 |
+| COMFY_IMAGE_NODE_ID | 91 |
+| COMFY_MASK_NODE_ID | 34 |
+| COMFY_SAM3_MASK_NODE_ID | 60 |
+| SKY_REFERENCE_SOURCE | ./inpainting-workflow-master/reference_sky.png |
+| SKY_REFERENCE_FILENAME | chrome_xWUjmfs7m4.png |
 
 For shared models across multiple repo copies or machines mounted on shared storage:
 
@@ -299,12 +308,24 @@ docker exec comfyui-container python /workspace/inpainting/sam3_tiled_mask.py \
   --input-dir /workspace/ComfyUI/input/<batch-name> \
   --output-dir /workspace/output-sam3-mask/<batch-name> \
   --pattern "*" \
+  --glare-threshold 0.4 \
+  --tile-rows 1 \
+  --tile-cols 2 \
   --workers 1
 ```
 
 **Output:** `comfyui_data/<container-name>/output-sam3-mask/<batch-name>/*.png`
 
 This stage uses the transformers-based SAM3 loader (`Sam3Model`/`Sam3Processor`) from the local model directory under `/workspace/ComfyUI/models/sam3`.
+
+Runner defaults map to SAM3 flags as:
+- `SAM3_GLARE_THRESHOLD` -> `--glare-threshold` (default `0.4`)
+- `SAM3_TILE_ROWS`/`SAM3_TILE_COLS` -> `--tile-rows`/`--tile-cols` (defaults `1/2`)
+- `SAM3_SCRIPT` chooses predictor script (`sam3_tiled_mask.py` default; `archive_sam3_tiled_mask.py` optional)
+
+Current mask merge behavior in both SAM3 scripts:
+- Sky + glare are merged by `max(sky, glare)` after per-prompt SAM3 thresholds.
+- There is no additional post-merge threshold binarization step.
 
 ### Stage 2: ComfyUI Inpainting
 
@@ -317,7 +338,7 @@ docker exec comfyui-container python /workspace/inpainting/comfyui_run.py \
   --mask /workspace/ComfyUI/input/perspective_mask.png \
   --sam3-mask-dir /workspace/output-sam3-mask/<batch-name> \
   --sam3-mask-node-id 60 \
-  --image-node-id 48 \
+  --image-node-id 91 \
   --mask-node-id 34 \
   --output-dir /workspace/ComfyUI/output/<batch-name> \
   --workers 3
@@ -329,6 +350,8 @@ docker exec comfyui-container python /workspace/inpainting/comfyui_run.py \
 ```
 
 **Output:** `comfyui_data/<container-name>/output/<batch-name>/*.jpg`
+
+Current default workflow (`workflow-updated.json`, synced from `carremoval-input-to-sky.json`) also expects the sky reference file `chrome_xWUjmfs7m4.png` in `/workspace/ComfyUI/input`; pipeline runners stage this automatically.
 
 ### Stage 3: Postprocessing (Laplacian + Seam Fix)
 
@@ -356,6 +379,7 @@ docker exec -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt comfyui-con
 **Output:** `comfyui_data/<container-name>/output-postprocessed/<batch-name>/*.jpg`
 
 `postprocess.py` uses `LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt` so workers do not race on first-time model download.
+Laplacian sky replacement currently runs in full-image mode (`--laplacian-roi-pad` is deprecated/no-op).
 
 ### Stage 4: Privacy Blur (Face + LP)
 
@@ -413,7 +437,7 @@ Options:
   --output-dir PATH      [default: comfy_outputs]
   --server TEXT          [default: http://127.0.0.1:8188]
   --workers INTEGER      [default: 3] - Parallel processing
-  --image-node-id TEXT   [default: 48] - Main image node ID
+  --image-node-id TEXT   [default: 91] - Main image node ID
   --mask-node-id TEXT    [default: 34] - Perspective mask node ID
 ```
 
@@ -626,7 +650,7 @@ sudo lsof -i :8188
 - ${COMFYUI_DATA_DIR}/output:/workspace/ComfyUI/output
 - ${COMFYUI_DATA_DIR}/output-postprocessed:/workspace/output-postprocessed
 - ${COMFYUI_DATA_DIR}/output-egoblur:/workspace/output-egoblur
-- ./workflow-updated.json:/workspace/workflow.json:ro
+- ./workflow-updated.json:/workspace/workflow.json:ro  # currently based on carremoval-input-to-sky.json
 ```
 
 ---

@@ -10,6 +10,7 @@ import click
 import numpy as np
 import pytorch360convert as p360
 import torch
+import torch.nn.functional as F
 from PIL import Image
 from transformers import Sam3Model, Sam3Processor
 
@@ -71,6 +72,16 @@ def _tensor_chw_to_rgb_u8(t):
     return np.clip(arr * 255.0, 0, 255).astype(np.uint8)
 
 
+def _dilate_mask(mask_np: np.ndarray, iterations: int):
+    iterations = max(0, int(iterations))
+    if iterations == 0:
+        return mask_np
+    t = torch.from_numpy(mask_np).float().unsqueeze(0).unsqueeze(0)
+    for _ in range(iterations):
+        t = F.max_pool2d(t, kernel_size=3, stride=1, padding=1)
+    return t.squeeze(0).squeeze(0).numpy()
+
+
 def _process_one(task):
     in_path, out_path = Path(task[0]), Path(task[1])
     t0 = time.perf_counter()
@@ -113,13 +124,13 @@ def _process_one(task):
 
         sky = _infer_mask(face_rgb_u8, cfg["sky_prompt"], cfg["sky_threshold"])
         glare = _infer_mask(face_rgb_u8, cfg["glare_prompt"], cfg["glare_threshold"])
+        glare = _dilate_mask(glare, cfg["glare_dilation"])
         combined = np.maximum(sky, glare)
 
         if cfg["tile_pad"] > 0:
             p = cfg["tile_pad"]
             combined = combined[p:-p, p:-p]
 
-        combined = (combined >= cfg["mask_threshold"]).astype(np.float32)
         mask_cube[face] = torch.from_numpy(combined).to(cfg["device"]).unsqueeze(0)
 
     eq_mask_t = p360.c2e(
@@ -132,7 +143,7 @@ def _process_one(task):
     )
 
     eq_mask = eq_mask_t.squeeze(0).detach().cpu().numpy()
-    eq_mask_u8 = (eq_mask >= cfg["mask_threshold"]).astype(np.uint8) * 255
+    eq_mask_u8 = np.clip(eq_mask * 255.0, 0, 255).astype(np.uint8)
     if cfg["square_output"]:
         eq_mask_u8 = _pad_mask_to_square(eq_mask_u8)
 
@@ -186,6 +197,7 @@ def _process_one(task):
 @click.option("--sky-threshold", default=0.5, show_default=True, type=float)
 @click.option("--glare-prompt", default="sunlight", show_default=True)
 @click.option("--glare-threshold", default=0.4, show_default=True, type=float)
+@click.option("--glare-dilation", default=3, show_default=True, type=int)
 @click.option("--mask-threshold", default=0.5, show_default=True, type=float)
 @click.option("--square-output/--no-square-output", default=True, show_default=True)
 def main(
@@ -210,6 +222,7 @@ def main(
     sky_threshold,
     glare_prompt,
     glare_threshold,
+    glare_dilation,
     mask_threshold,
     square_output,
 ):
@@ -257,6 +270,7 @@ def main(
         sky_threshold=sky_threshold,
         glare_prompt=glare_prompt,
         glare_threshold=glare_threshold,
+        glare_dilation=max(0, int(glare_dilation)),
         mask_threshold=mask_threshold,
         square_output=square_output,
     )
@@ -265,7 +279,7 @@ def main(
         f"SAM3 cube mask: input={len(in_files)} pending={len(tasks)} workers={workers} device={device} face_size={face_size}"
     )
     click.echo(
-        f"tile-compat rows={tile_rows} cols={tile_cols} overlap=({overlap_x},{overlap_y}) overlap_ratio={overlap_ratio} pad={tile_pad} sky='{sky_prompt}'({sky_threshold}) glare='{glare_prompt}'({glare_threshold})"
+        f"tile-compat rows={tile_rows} cols={tile_cols} overlap=({overlap_x},{overlap_y}) overlap_ratio={overlap_ratio} pad={tile_pad} sky='{sky_prompt}'({sky_threshold}) glare='{glare_prompt}'({glare_threshold}) glare_dilation={max(0, int(glare_dilation))}"
     )
 
     results, failures = [], []

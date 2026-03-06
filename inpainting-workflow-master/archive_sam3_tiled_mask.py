@@ -9,6 +9,7 @@ from pathlib import Path
 import click
 import numpy as np
 import torch
+import torch.nn.functional as F
 from PIL import Image
 from transformers import Sam3Model, Sam3Processor
 
@@ -103,6 +104,16 @@ def _infer_mask(tile_pil, prompt, threshold):
     return torch.stack(list(masks)).float().amax(dim=0).cpu().numpy()
 
 
+def _dilate_mask(mask_np: np.ndarray, iterations: int):
+    iterations = max(0, int(iterations))
+    if iterations == 0:
+        return mask_np
+    t = torch.from_numpy(mask_np).float().unsqueeze(0).unsqueeze(0)
+    for _ in range(iterations):
+        t = F.max_pool2d(t, kernel_size=3, stride=1, padding=1)
+    return t.squeeze(0).squeeze(0).numpy()
+
+
 def _process_one(task):
     in_path, out_path = Path(task[0]), Path(task[1])
     t0 = time.perf_counter()
@@ -146,6 +157,7 @@ def _process_one(task):
         tile_pil = Image.fromarray(tile_u8, mode="RGB")
         sky = _infer_mask(tile_pil, cfg["sky_prompt"], cfg["sky_threshold"])
         glare = _infer_mask(tile_pil, cfg["glare_prompt"], cfg["glare_threshold"])
+        glare = _dilate_mask(glare, cfg["glare_dilation"])
 
         if tile_pad > 0:
             sky = sky[tile_pad:-tile_pad, tile_pad:-tile_pad]
@@ -161,7 +173,7 @@ def _process_one(task):
     if pad_right > 0:
         stitched = stitched[:, :-pad_right]
 
-    stitched = (stitched >= cfg["mask_threshold"]).astype(np.uint8) * 255
+    stitched = np.clip(stitched * 255.0, 0, 255).astype(np.uint8)
     if cfg["square_output"]:
         stitched = _pad_mask_to_square(stitched)
 
@@ -214,6 +226,7 @@ def _process_one(task):
 @click.option("--sky-threshold", default=0.5, show_default=True, type=float)
 @click.option("--glare-prompt", default="sunlight", show_default=True)
 @click.option("--glare-threshold", default=0.4, show_default=True, type=float)
+@click.option("--glare-dilation", default=3, show_default=True, type=int)
 @click.option("--mask-threshold", default=0.5, show_default=True, type=float)
 @click.option("--square-output/--no-square-output", default=True, show_default=True)
 def main(
@@ -237,6 +250,7 @@ def main(
     sky_threshold,
     glare_prompt,
     glare_threshold,
+    glare_dilation,
     mask_threshold,
     square_output,
 ):
@@ -285,6 +299,7 @@ def main(
         sky_threshold=sky_threshold,
         glare_prompt=glare_prompt,
         glare_threshold=glare_threshold,
+        glare_dilation=max(0, int(glare_dilation)),
         mask_threshold=mask_threshold,
         square_output=square_output,
     )
@@ -293,7 +308,7 @@ def main(
         f"SAM3 tiled mask: input={len(in_files)} pending={len(tasks)} workers={workers} device={device}"
     )
     click.echo(
-        f"resize={resize_width}x{resize_height} tiles={tile_rows}x{tile_cols} overlap=({overlap_x},{overlap_y}) tile_pad={tile_pad} sky='{sky_prompt}'({sky_threshold}) glare='{glare_prompt}'({glare_threshold})"
+        f"resize={resize_width}x{resize_height} tiles={tile_rows}x{tile_cols} overlap=({overlap_x},{overlap_y}) tile_pad={tile_pad} sky='{sky_prompt}'({sky_threshold}) glare='{glare_prompt}'({glare_threshold}) glare_dilation={max(0, int(glare_dilation))}"
     )
 
     results, failures = [], []

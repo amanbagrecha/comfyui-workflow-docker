@@ -14,6 +14,10 @@ PRIVACY_WORKERS="${PRIVACY_WORKERS:-2}"
 SAM3_WORKERS="${SAM3_WORKERS:-4}"
 SAM3_RESIZE_WIDTH="${SAM3_RESIZE_WIDTH:-0}"
 SAM3_RESIZE_HEIGHT="${SAM3_RESIZE_HEIGHT:-0}"
+SAM3_GLARE_THRESHOLD="${SAM3_GLARE_THRESHOLD:-0.4}"
+SAM3_TILE_ROWS="${SAM3_TILE_ROWS:-1}"
+SAM3_TILE_COLS="${SAM3_TILE_COLS:-2}"
+SAM3_SCRIPT="${SAM3_SCRIPT:-sam3_tiled_mask.py}"
 LAPLACIAN_DILATION="${LAPLACIAN_DILATION:-1}"
 LAPLACIAN_BLUR="${LAPLACIAN_BLUR:-10}"
 LAPLACIAN_LEVELS="${LAPLACIAN_LEVELS:-7}"
@@ -48,6 +52,11 @@ FORCE_REPROCESS="${FORCE_REPROCESS:-0}"
 STRICT_HARDLINK="${STRICT_HARDLINK:-1}"
 AUTO_INSTALL_NVIDIA_TOOLKIT="${AUTO_INSTALL_NVIDIA_TOOLKIT:-1}"
 NVIDIA_CUDA_TEST_IMAGE="${NVIDIA_CUDA_TEST_IMAGE:-nvidia/cuda:12.6.0-base-ubuntu22.04}"
+COMFY_IMAGE_NODE_ID="${COMFY_IMAGE_NODE_ID:-91}"
+COMFY_MASK_NODE_ID="${COMFY_MASK_NODE_ID:-34}"
+COMFY_SAM3_MASK_NODE_ID="${COMFY_SAM3_MASK_NODE_ID:-60}"
+SKY_REFERENCE_SOURCE="${SKY_REFERENCE_SOURCE:-$REPO/inpainting-workflow-master/reference_sky.png}"
+SKY_REFERENCE_FILENAME="${SKY_REFERENCE_FILENAME:-chrome_xWUjmfs7m4.png}"
 RUN_ID="$(date +%Y%m%d_%H%M%S)_${CONTAINER_NAME}_$$"
 
 LOG_DIR="$REPO/logs"
@@ -78,6 +87,10 @@ echo "PRIVACY_WORKERS=$PRIVACY_WORKERS"
 echo "SAM3_WORKERS=$SAM3_WORKERS"
 echo "SAM3_RESIZE_WIDTH=$SAM3_RESIZE_WIDTH"
 echo "SAM3_RESIZE_HEIGHT=$SAM3_RESIZE_HEIGHT"
+echo "SAM3_GLARE_THRESHOLD=$SAM3_GLARE_THRESHOLD"
+echo "SAM3_TILE_ROWS=$SAM3_TILE_ROWS"
+echo "SAM3_TILE_COLS=$SAM3_TILE_COLS"
+echo "SAM3_SCRIPT=$SAM3_SCRIPT"
 echo "LAPLACIAN_DILATION=$LAPLACIAN_DILATION"
 echo "LAPLACIAN_BLUR=$LAPLACIAN_BLUR"
 echo "LAPLACIAN_LEVELS=$LAPLACIAN_LEVELS"
@@ -96,6 +109,11 @@ echo "PRIVACY_OUTPUT_MODE=$PRIVACY_OUTPUT_MODE"
 echo "PRIVACY_PYTHON_BIN=$PRIVACY_PYTHON_BIN"
 echo "TORCH_CACHE_DIR=$TORCH_CACHE_DIR"
 echo "COMFY_READY_TIMEOUT=$COMFY_READY_TIMEOUT"
+echo "COMFY_IMAGE_NODE_ID=$COMFY_IMAGE_NODE_ID"
+echo "COMFY_MASK_NODE_ID=$COMFY_MASK_NODE_ID"
+echo "COMFY_SAM3_MASK_NODE_ID=$COMFY_SAM3_MASK_NODE_ID"
+echo "SKY_REFERENCE_SOURCE=$SKY_REFERENCE_SOURCE"
+echo "SKY_REFERENCE_FILENAME=$SKY_REFERENCE_FILENAME"
 if [ -n "$FINAL_OUTPUT_DIR" ]; then
   echo "FINAL_OUTPUT_DIR=$FINAL_OUTPUT_DIR"
 fi
@@ -316,6 +334,14 @@ if [ ! -f "$COMFYUI_DATA_DIR/input/perspective_mask.png" ]; then
   echo "Copied perspective mask to $COMFYUI_DATA_DIR/input/perspective_mask.png"
 fi
 
+if [ ! -f "$SKY_REFERENCE_SOURCE" ]; then
+  echo "ERROR: sky reference source not found: $SKY_REFERENCE_SOURCE"
+  exit 1
+fi
+SKY_REFERENCE_TARGET="$COMFYUI_DATA_DIR/input/$SKY_REFERENCE_FILENAME"
+cp "$SKY_REFERENCE_SOURCE" "$SKY_REFERENCE_TARGET"
+echo "Staged sky reference image to $SKY_REFERENCE_TARGET"
+
 if [ "$RESET_CONTAINER_BEFORE_RUN" = "1" ]; then
   if docker ps -a --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
     echo "Resetting existing container before run: $CONTAINER_NAME"
@@ -468,10 +494,13 @@ fi
 
 S_SAM3=$(date +%s)
 echo "=== STAGE_START sam3_mask ==="
-docker exec "$CONTAINER_NAME" python /workspace/inpainting/sam3_tiled_mask.py \
+docker exec "$CONTAINER_NAME" python "/workspace/inpainting/$SAM3_SCRIPT" \
   --input-dir "$CONTAINER_INPUT_DIR" \
   --output-dir /workspace/output-sam3-mask/$BATCH_NAME \
   --pattern "*" \
+  --glare-threshold "$SAM3_GLARE_THRESHOLD" \
+  --tile-rows "$SAM3_TILE_ROWS" \
+  --tile-cols "$SAM3_TILE_COLS" \
   --resize-width "$SAM3_RESIZE_WIDTH" \
   --resize-height "$SAM3_RESIZE_HEIGHT" \
   --workers "$SAM3_WORKERS"
@@ -504,9 +533,9 @@ docker exec "$CONTAINER_NAME" python /workspace/inpainting/comfyui_run.py \
   --mask /workspace/ComfyUI/input/perspective_mask.png \
   --sam3-mask-dir /workspace/output-sam3-mask/$BATCH_NAME \
   --output-dir /workspace/ComfyUI/output/$BATCH_NAME \
-  --image-node-id 48 \
-  --mask-node-id 34 \
-  --sam3-mask-node-id 60 \
+  --image-node-id "$COMFY_IMAGE_NODE_ID" \
+  --mask-node-id "$COMFY_MASK_NODE_ID" \
+  --sam3-mask-node-id "$COMFY_SAM3_MASK_NODE_ID" \
   --workers 1 \
   --timeout-s 3600
 E_INP=$(date +%s)
@@ -708,6 +737,15 @@ TOTAL_SEC=$((END_EPOCH - START_EPOCH))
   echo "privacy_workers=$PRIVACY_WORKERS"
   echo "sam3_resize_width=$SAM3_RESIZE_WIDTH"
   echo "sam3_resize_height=$SAM3_RESIZE_HEIGHT"
+  echo "sam3_glare_threshold=$SAM3_GLARE_THRESHOLD"
+  echo "sam3_tile_rows=$SAM3_TILE_ROWS"
+  echo "sam3_tile_cols=$SAM3_TILE_COLS"
+  echo "sam3_script=$SAM3_SCRIPT"
+  echo "comfy_image_node_id=$COMFY_IMAGE_NODE_ID"
+  echo "comfy_mask_node_id=$COMFY_MASK_NODE_ID"
+  echo "comfy_sam3_mask_node_id=$COMFY_SAM3_MASK_NODE_ID"
+  echo "sky_reference_source=$SKY_REFERENCE_SOURCE"
+  echo "sky_reference_filename=$SKY_REFERENCE_FILENAME"
   echo "privacy_face_model=$PRIVACY_FACE_MODEL"
   echo "privacy_lp_model=$PRIVACY_LP_MODEL"
   echo "privacy_face_conf=$PRIVACY_FACE_CONF"

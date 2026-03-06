@@ -14,15 +14,16 @@ This repository runs a 5-stage 360 panorama pipeline:
 ## Workflow Source Used by Multi-GPU Entry Point
 - Primary entry point is `run_multi_gpu_pipeline.sh`.
 - `run_multi_gpu_pipeline.sh` shards `SRC` and launches one `run_full_pipeline.sh` job per GPU in tmux.
-- Each per-GPU `run_full_pipeline.sh` job runs SAM3 masks via `inpainting-workflow-master/sam3_tiled_mask.py` using CLI defaults (transformers-based SAM3 via `Sam3Model`/`Sam3Processor`).
+- Each per-GPU `run_full_pipeline.sh` job runs SAM3 masks via `inpainting-workflow-master/$SAM3_SCRIPT` (`sam3_tiled_mask.py` default; supports `archive_sam3_tiled_mask.py`) using transformers-based SAM3 (`Sam3Model`/`Sam3Processor`).
 - Each per-GPU `run_full_pipeline.sh` job runs ComfyUI with `--workflow-json /workspace/workflow.json`.
-- `docker-compose.yml` mounts `/workspace/workflow.json` from `workflow-updated.json`.
+- `docker-compose.yml` mounts `/workspace/workflow.json` from `workflow-updated.json` (current content comes from `carremoval-input-to-sky.json`).
 - `docker-compose.yml` still mounts `/workspace/workflow_SAM3_prompt.json` from `workflow_SAM3_prompt.json` for optional/manual workflows.
 - Result: running `run_multi_gpu_pipeline.sh` uses `sam3_tiled_mask.py` CLI defaults and `workflow-updated.json` for ComfyUI inpainting on every shard.
 
 ## One-Command Behavior
 `run_multi_gpu_pipeline.sh` is the user-facing one-command runner and, through per-GPU `run_full_pipeline.sh` jobs, bootstraps setup automatically:
 - Ensures `$COMFYUI_DATA_DIR/input/perspective_mask.png` exists (copies from `inpainting-workflow-master/perspective_mask.png` if missing).
+- Stages sky reference image as `$COMFYUI_DATA_DIR/input/chrome_xWUjmfs7m4.png` from `inpainting-workflow-master/reference_sky.png`.
 - Checks required models (including `models/comfyui/lama/big-lama.pt`) and runs `download-models.sh` if missing (`AUTO_DOWNLOAD_MODELS=1`).
 - Starts the container via `docker compose -p "$CONTAINER_NAME" up -d` if not already up.
 - When `DOWNSTREAM_MODE=isolated`, it stops ComfyUI containers before postprocess/privacy blur.
@@ -45,6 +46,10 @@ Useful env vars (with defaults):
 - `EGOBLUR_WORKERS` (legacy, ignored by privacy blur)
 - `PRIVACY_WORKERS` (default: `2`)
 - `SAM3_WORKERS` (default: `4`)
+- `SAM3_GLARE_THRESHOLD` (default: `0.4`)
+- `SAM3_TILE_ROWS` (default: `1`)
+- `SAM3_TILE_COLS` (default: `2`)
+- `SAM3_SCRIPT` (default: `sam3_tiled_mask.py`; set `archive_sam3_tiled_mask.py` to use archive tiled predictor)
 - `LAPLACIAN_DILATION` (default: `1`)
 - `LAPLACIAN_BLUR` (default: `10`)
 - `LAPLACIAN_LEVELS` (default: `7`)
@@ -72,6 +77,11 @@ Useful env vars (with defaults):
 - `COMFY_READY_POLL` (default: `2`)
 - `NVIDIA_CUDA_TEST_IMAGE` (default: `nvidia/cuda:12.6.0-base-ubuntu22.04`)
 - `RESET_CONTAINER_BEFORE_RUN` (default: `1`)
+- `COMFY_IMAGE_NODE_ID` (default: `91`)
+- `COMFY_MASK_NODE_ID` (default: `34`)
+- `COMFY_SAM3_MASK_NODE_ID` (default: `60`)
+- `SKY_REFERENCE_SOURCE` (default: `./inpainting-workflow-master/reference_sky.png`)
+- `SKY_REFERENCE_FILENAME` (default: `chrome_xWUjmfs7m4.png`)
 
 ## What the Pipeline Does Per GPU Shard
 Each per-GPU `run_full_pipeline.sh` shard job performs the following stages:
@@ -81,9 +91,9 @@ Each per-GPU `run_full_pipeline.sh` shard job performs the following stages:
    - Hardlinks them into `$COMFYUI_DATA_DIR/input/$BATCH_NAME`.
 
 2. **SAM3 tiled mask generation**
-   - Runs `inpainting-workflow-master/sam3_tiled_mask.py` inside `$CONTAINER_NAME`.
+   - Runs `inpainting-workflow-master/$SAM3_SCRIPT` inside `$CONTAINER_NAME`.
    - Reads from `/workspace/ComfyUI/input/$BATCH_NAME`.
-   - Uses `sam3_tiled_mask.py` CLI defaults for resize/tile/prompt settings unless explicit flags are passed.
+   - Uses env-mapped settings: `--glare-threshold $SAM3_GLARE_THRESHOLD`, `--tile-rows $SAM3_TILE_ROWS`, `--tile-cols $SAM3_TILE_COLS`, `--resize-width $SAM3_RESIZE_WIDTH`, `--resize-height $SAM3_RESIZE_HEIGHT`, `--workers $SAM3_WORKERS`.
    - Writes masks to `/workspace/output-sam3-mask/$BATCH_NAME`.
 
 3. **ComfyUI inpainting**
@@ -92,6 +102,8 @@ Each per-GPU `run_full_pipeline.sh` shard job performs the following stages:
      - workflow: `/workspace/workflow.json` (mapped from `workflow-updated.json`)
      - images: `/workspace/ComfyUI/input/$BATCH_NAME`
      - mask: `/workspace/ComfyUI/input/perspective_mask.png`
+     - reference sky image: `/workspace/ComfyUI/input/chrome_xWUjmfs7m4.png`
+     - node IDs: `--image-node-id 91 --mask-node-id 34 --sam3-mask-node-id 60`
    - Writes stage output to `/workspace/ComfyUI/output/$BATCH_NAME`.
 
 4. **Postprocess**
@@ -102,6 +114,7 @@ Each per-GPU `run_full_pipeline.sh` shard job performs the following stages:
    - Reads SAM3 masks from `/workspace/output-sam3-mask/$BATCH_NAME`.
    - Uses `LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt` for SimpleLama weights.
    - Runs Laplacian replacement with tunables: `--dilation`, `--blur`, `--levels`.
+   - Current Laplacian mode is full-image blend (legacy `--laplacian-roi-pad` path is deprecated/no-op).
    - Uses top mask `/workspace/inpainting/sky_mask_updated.png`.
    - Writes to `/workspace/output-postprocessed/$BATCH_NAME`.
 
@@ -134,6 +147,10 @@ POSTPROCESS_WORKERS=4 \
 EGOBLUR_WORKERS=4 \
 PRIVACY_WORKERS=2 \
 SAM3_WORKERS=4 \
+SAM3_GLARE_THRESHOLD=0.4 \
+SAM3_TILE_ROWS=1 \
+SAM3_TILE_COLS=2 \
+SAM3_SCRIPT="sam3_tiled_mask.py" \
 LAPLACIAN_DILATION=1 \
 LAPLACIAN_BLUR=10 \
 LAPLACIAN_LEVELS=7 \
@@ -150,6 +167,11 @@ COMFY_READY_TIMEOUT=300 \
 COMFY_READY_POLL=2 \
 NVIDIA_CUDA_TEST_IMAGE="nvidia/cuda:12.6.0-base-ubuntu22.04" \
 RESET_CONTAINER_BEFORE_RUN=1 \
+COMFY_IMAGE_NODE_ID=91 \
+COMFY_MASK_NODE_ID=34 \
+COMFY_SAM3_MASK_NODE_ID=60 \
+SKY_REFERENCE_SOURCE="./inpainting-workflow-master/reference_sky.png" \
+SKY_REFERENCE_FILENAME="chrome_xWUjmfs7m4.png" \
 ./run_multi_gpu_pipeline.sh
 ```
 

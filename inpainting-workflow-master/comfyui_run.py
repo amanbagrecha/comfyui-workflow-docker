@@ -63,7 +63,7 @@ def timer(func):
 @click.option("--overwrite", is_flag=True)
 @click.option(
     "--image-node-id",
-    default="48",
+    default="91",
     show_default=True,
     help="Main image node (LoadImage or WAS Image Load)",
 )

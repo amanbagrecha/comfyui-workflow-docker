@@ -126,9 +126,11 @@ Default values:
 | EGOBLUR_WORKERS | 4 (legacy) |
 | PRIVACY_WORKERS | 2 |
 | SAM3_WORKERS | 4 |
+| SAM3_RESIZE_WIDTH | 4000 |
+| SAM3_RESIZE_HEIGHT | 2000 |
 | SAM3_GLARE_THRESHOLD | 0.4 |
-| SAM3_TILE_ROWS | 1 |
-| SAM3_TILE_COLS | 2 |
+| SAM3_TILE_ROWS | 2 |
+| SAM3_TILE_COLS | 1 |
 | SAM3_SCRIPT | sam3_tiled_mask.py |
 | DOWNSTREAM_MODE | isolated |
 | STOP_AFTER_STAGE | egoblur |
@@ -308,9 +310,11 @@ docker exec comfyui-container python /workspace/inpainting/sam3_tiled_mask.py \
   --input-dir /workspace/ComfyUI/input/<batch-name> \
   --output-dir /workspace/output-sam3-mask/<batch-name> \
   --pattern "*" \
+  --resize-width 4000 \
+  --resize-height 2000 \
   --glare-threshold 0.4 \
-  --tile-rows 1 \
-  --tile-cols 2 \
+  --tile-rows 2 \
+  --tile-cols 1 \
   --workers 1
 ```
 
@@ -320,7 +324,8 @@ This stage uses the transformers-based SAM3 loader (`Sam3Model`/`Sam3Processor`)
 
 Runner defaults map to SAM3 flags as:
 - `SAM3_GLARE_THRESHOLD` -> `--glare-threshold` (default `0.4`)
-- `SAM3_TILE_ROWS`/`SAM3_TILE_COLS` -> `--tile-rows`/`--tile-cols` (defaults `1/2`)
+- `SAM3_RESIZE_WIDTH`/`SAM3_RESIZE_HEIGHT` -> `--resize-width`/`--resize-height` (defaults `4000/2000`)
+- `SAM3_TILE_ROWS`/`SAM3_TILE_COLS` -> `--tile-rows`/`--tile-cols` (defaults `2/1`)
 - `SAM3_SCRIPT` chooses predictor script (`sam3_tiled_mask.py` default; `archive_sam3_tiled_mask.py` optional)
 
 Current mask merge behavior in both SAM3 scripts:
@@ -410,6 +415,9 @@ SRC="$SRC" FINAL_OUTPUT_DIR="$FINAL_OUTPUT_DIR" RUN_NAME="$RUN_NAME" GPU_IDS="$G
 
 # Optional: stop after postprocess for partial runs
 SRC="$SRC" RUN_NAME="${RUN_NAME}-post" GPU_IDS="$GPU_IDS" STOP_AFTER_STAGE=postprocess ./run_multi_gpu_pipeline.sh
+
+# Optional: SAM3-only run
+SRC="$SRC" RUN_NAME="${RUN_NAME}-sam3" GPU_IDS="$GPU_IDS" STOP_AFTER_STAGE=sam3 ./run_multi_gpu_pipeline.sh
 
 # 2. Check stage outputs for one shard
 ls -lah "comfyui_data/comfyui-g0/output/${RUN_NAME}-g0"

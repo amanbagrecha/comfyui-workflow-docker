@@ -46,9 +46,11 @@ Useful env vars (with defaults):
 - `EGOBLUR_WORKERS` (legacy, ignored by privacy blur)
 - `PRIVACY_WORKERS` (default: `2`)
 - `SAM3_WORKERS` (default: `4`)
+- `SAM3_RESIZE_WIDTH` (default: `4000`)
+- `SAM3_RESIZE_HEIGHT` (default: `2000`)
 - `SAM3_GLARE_THRESHOLD` (default: `0.4`)
-- `SAM3_TILE_ROWS` (default: `1`)
-- `SAM3_TILE_COLS` (default: `2`)
+- `SAM3_TILE_ROWS` (default: `2`)
+- `SAM3_TILE_COLS` (default: `1`)
 - `SAM3_SCRIPT` (default: `sam3_tiled_mask.py`; set `archive_sam3_tiled_mask.py` to use archive tiled predictor)
 - `LAPLACIAN_DILATION` (default: `1`)
 - `LAPLACIAN_BLUR` (default: `10`)
@@ -71,7 +73,7 @@ Useful env vars (with defaults):
 - `PRIVACY_PYTHON_BIN` (default: `/data/.venv/bin/python`)
 - `FORCE_REPROCESS` (default: `0`)
 - `DOWNSTREAM_MODE` (default: `isolated`)
-- `STOP_AFTER_STAGE` (default: `egoblur`; supports `inpainting` or `postprocess` for partial runs)
+- `STOP_AFTER_STAGE` (default: `egoblur`; supports `sam3`, `inpainting`, or `postprocess` for partial runs)
 - `AUTO_INSTALL_NVIDIA_TOOLKIT` (default: `1`)
 - `COMFY_READY_TIMEOUT` (default: `300`)
 - `COMFY_READY_POLL` (default: `2`)
@@ -147,9 +149,11 @@ POSTPROCESS_WORKERS=4 \
 EGOBLUR_WORKERS=4 \
 PRIVACY_WORKERS=2 \
 SAM3_WORKERS=4 \
+SAM3_RESIZE_WIDTH=4000 \
+SAM3_RESIZE_HEIGHT=2000 \
 SAM3_GLARE_THRESHOLD=0.4 \
-SAM3_TILE_ROWS=1 \
-SAM3_TILE_COLS=2 \
+SAM3_TILE_ROWS=2 \
+SAM3_TILE_COLS=1 \
 SAM3_SCRIPT="sam3_tiled_mask.py" \
 LAPLACIAN_DILATION=1 \
 LAPLACIAN_BLUR=10 \
@@ -222,6 +226,12 @@ Force full reprocess of an existing batch:
 
 ```bash
 FORCE_REPROCESS=1 ./run_multi_gpu_pipeline.sh
+```
+
+SAM3-only run (skip downstream stages):
+
+```bash
+STOP_AFTER_STAGE=sam3 ./run_multi_gpu_pipeline.sh
 ```
 
 Independent stage run (without ComfyUI API):

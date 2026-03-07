@@ -307,11 +307,11 @@ export COMFY_STOP_CONTAINERS="$container_name"
 export STOP_AFTER_STAGE="$STOP_AFTER_STAGE"
 export FINAL_OUTPUT_DIR=""
 export SAM3_WORKERS="${SAM3_WORKERS:-4}"
-export SAM3_RESIZE_WIDTH="${SAM3_RESIZE_WIDTH:-0}"
-export SAM3_RESIZE_HEIGHT="${SAM3_RESIZE_HEIGHT:-0}"
+export SAM3_RESIZE_WIDTH="${SAM3_RESIZE_WIDTH:-4000}"
+export SAM3_RESIZE_HEIGHT="${SAM3_RESIZE_HEIGHT:-2000}"
 export SAM3_GLARE_THRESHOLD="${SAM3_GLARE_THRESHOLD:-0.4}"
-export SAM3_TILE_ROWS="${SAM3_TILE_ROWS:-1}"
-export SAM3_TILE_COLS="${SAM3_TILE_COLS:-2}"
+export SAM3_TILE_ROWS="${SAM3_TILE_ROWS:-2}"
+export SAM3_TILE_COLS="${SAM3_TILE_COLS:-1}"
 export SAM3_SCRIPT="${SAM3_SCRIPT:-sam3_tiled_mask.py}"
 export POSTPROCESS_WORKERS="${POSTPROCESS_WORKERS:-4}"
 export EGOBLUR_WORKERS="${EGOBLUR_WORKERS:-4}"
@@ -424,6 +424,8 @@ PY
 
   if [[ "$STOP_AFTER_STAGE" == "egoblur" ]]; then
     out_dir="$comfy_data_dir/output-egoblur/$batch"
+  elif [[ "$STOP_AFTER_STAGE" == "sam3" ]]; then
+    out_dir="$comfy_data_dir/output-sam3-mask/$batch"
   elif [[ "$STOP_AFTER_STAGE" == "postprocess" ]]; then
     out_dir="$comfy_data_dir/output-postprocessed/$batch"
   else

@@ -12,11 +12,11 @@ POSTPROCESS_WORKERS="${POSTPROCESS_WORKERS:-4}"
 EGOBLUR_WORKERS="${EGOBLUR_WORKERS:-4}"
 PRIVACY_WORKERS="${PRIVACY_WORKERS:-2}"
 SAM3_WORKERS="${SAM3_WORKERS:-4}"
-SAM3_RESIZE_WIDTH="${SAM3_RESIZE_WIDTH:-0}"
-SAM3_RESIZE_HEIGHT="${SAM3_RESIZE_HEIGHT:-0}"
+SAM3_RESIZE_WIDTH="${SAM3_RESIZE_WIDTH:-4000}"
+SAM3_RESIZE_HEIGHT="${SAM3_RESIZE_HEIGHT:-2000}"
 SAM3_GLARE_THRESHOLD="${SAM3_GLARE_THRESHOLD:-0.4}"
-SAM3_TILE_ROWS="${SAM3_TILE_ROWS:-1}"
-SAM3_TILE_COLS="${SAM3_TILE_COLS:-2}"
+SAM3_TILE_ROWS="${SAM3_TILE_ROWS:-2}"
+SAM3_TILE_COLS="${SAM3_TILE_COLS:-1}"
 SAM3_SCRIPT="${SAM3_SCRIPT:-sam3_tiled_mask.py}"
 LAPLACIAN_DILATION="${LAPLACIAN_DILATION:-1}"
 LAPLACIAN_BLUR="${LAPLACIAN_BLUR:-10}"
@@ -154,8 +154,8 @@ if [[ "$DOWNSTREAM_MODE" != "inline" && "$DOWNSTREAM_MODE" != "isolated" ]]; the
   exit 1
 fi
 
-if [[ "$STOP_AFTER_STAGE" != "inpainting" && "$STOP_AFTER_STAGE" != "postprocess" && "$STOP_AFTER_STAGE" != "egoblur" ]]; then
-  echo "ERROR: Invalid STOP_AFTER_STAGE=$STOP_AFTER_STAGE (expected: inpainting|postprocess|egoblur)"
+if [[ "$STOP_AFTER_STAGE" != "sam3" && "$STOP_AFTER_STAGE" != "inpainting" && "$STOP_AFTER_STAGE" != "postprocess" && "$STOP_AFTER_STAGE" != "egoblur" ]]; then
+  echo "ERROR: Invalid STOP_AFTER_STAGE=$STOP_AFTER_STAGE (expected: sam3|inpainting|postprocess|egoblur)"
   exit 1
 fi
 
@@ -525,25 +525,34 @@ if [ "$SAM3_MASK_COUNT" -eq 0 ]; then
   exit 1
 fi
 
-S_INP=$(date +%s)
-echo "=== STAGE_START inpainting ==="
-docker exec "$CONTAINER_NAME" python /workspace/inpainting/comfyui_run.py \
-  --workflow-json /workspace/workflow.json \
-  --input-dir "$CONTAINER_INPUT_DIR" \
-  --mask /workspace/ComfyUI/input/perspective_mask.png \
-  --sam3-mask-dir /workspace/output-sam3-mask/$BATCH_NAME \
-  --output-dir /workspace/ComfyUI/output/$BATCH_NAME \
-  --image-node-id "$COMFY_IMAGE_NODE_ID" \
-  --mask-node-id "$COMFY_MASK_NODE_ID" \
-  --sam3-mask-node-id "$COMFY_SAM3_MASK_NODE_ID" \
-  --workers 1 \
-  --timeout-s 3600
-E_INP=$(date +%s)
-INPAINT_SEC=$((E_INP - S_INP))
-echo "=== STAGE_END inpainting elapsed_sec=$INPAINT_SEC ==="
+INPAINT_SEC=0
+POSTPROCESS_SEC=0
+EGOBLUR_SEC=0
 
-export OUT1
-INPAINT_COUNT=$(python3 - <<'PY'
+if [ "$STOP_AFTER_STAGE" = "sam3" ]; then
+  echo "=== STAGE_SKIP inpainting reason=STOP_AFTER_STAGE=sam3 elapsed_sec=0 ==="
+  echo "=== STAGE_SKIP postprocess reason=STOP_AFTER_STAGE=sam3 elapsed_sec=0 ==="
+  echo "=== STAGE_SKIP egoblur reason=STOP_AFTER_STAGE=sam3 elapsed_sec=0 ==="
+else
+  S_INP=$(date +%s)
+  echo "=== STAGE_START inpainting ==="
+  docker exec "$CONTAINER_NAME" python /workspace/inpainting/comfyui_run.py \
+    --workflow-json /workspace/workflow.json \
+    --input-dir "$CONTAINER_INPUT_DIR" \
+    --mask /workspace/ComfyUI/input/perspective_mask.png \
+    --sam3-mask-dir /workspace/output-sam3-mask/$BATCH_NAME \
+    --output-dir /workspace/ComfyUI/output/$BATCH_NAME \
+    --image-node-id "$COMFY_IMAGE_NODE_ID" \
+    --mask-node-id "$COMFY_MASK_NODE_ID" \
+    --sam3-mask-node-id "$COMFY_SAM3_MASK_NODE_ID" \
+    --workers 1 \
+    --timeout-s 3600
+  E_INP=$(date +%s)
+  INPAINT_SEC=$((E_INP - S_INP))
+  echo "=== STAGE_END inpainting elapsed_sec=$INPAINT_SEC ==="
+
+  export OUT1
+  INPAINT_COUNT=$(python3 - <<'PY'
 import os
 from pathlib import Path
 
@@ -553,110 +562,108 @@ count = sum(1 for p in root.rglob("*") if p.is_file() and p.suffix.lower() in ex
 print(count)
 PY
 )
-echo "inpainting_output_count=$INPAINT_COUNT"
-if [ "$INPAINT_COUNT" -eq 0 ]; then
-  echo "ERROR: No inpainting outputs found in $OUT1; aborting downstream stages."
-  exit 1
-fi
-
-POSTPROCESS_SEC=0
-EGOBLUR_SEC=0
-
-if [ "$STOP_AFTER_STAGE" = "inpainting" ]; then
-  echo "=== STAGE_SKIP postprocess reason=STOP_AFTER_STAGE=inpainting elapsed_sec=0 ==="
-  echo "=== STAGE_SKIP egoblur reason=STOP_AFTER_STAGE=inpainting elapsed_sec=0 ==="
-else
-  if [ "$STOP_AFTER_STAGE" = "egoblur" ]; then
-    ensure_privacy_python_ready
+  echo "inpainting_output_count=$INPAINT_COUNT"
+  if [ "$INPAINT_COUNT" -eq 0 ]; then
+    echo "ERROR: No inpainting outputs found in $OUT1; aborting downstream stages."
+    exit 1
   fi
 
-  if [ "$DOWNSTREAM_MODE" = "isolated" ]; then
-    stop_comfy_containers_for_downstream
-  fi
-
-  S_POST=$(date +%s)
-  echo "=== STAGE_START postprocess ==="
-  if [ "$DOWNSTREAM_MODE" = "inline" ]; then
-    docker exec \
-      -u "$(id -u):$(id -g)" \
-      -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt \
-      "$CONTAINER_NAME" \
-      python /workspace/inpainting/postprocess.py \
-      -i /workspace/ComfyUI/output/$BATCH_NAME \
-      -o /workspace/output-postprocessed/$BATCH_NAME \
-      --top-mask /workspace/inpainting/sky_mask_updated.png \
-      --sam3-mask-dir /workspace/output-sam3-mask/$BATCH_NAME \
-      --dilation "$LAPLACIAN_DILATION" \
-      --blur "$LAPLACIAN_BLUR" \
-      --levels "$LAPLACIAN_LEVELS" \
-      --pattern "*.jpg" \
-      -j "$POSTPROCESS_WORKERS"
+  if [ "$STOP_AFTER_STAGE" = "inpainting" ]; then
+    echo "=== STAGE_SKIP postprocess reason=STOP_AFTER_STAGE=inpainting elapsed_sec=0 ==="
+    echo "=== STAGE_SKIP egoblur reason=STOP_AFTER_STAGE=inpainting elapsed_sec=0 ==="
   else
-    POST_DOCKER_ARGS=(
-      --rm
-      --name "postprocess-${RUN_ID}"
-      --gpus "device=${NVIDIA_VISIBLE_DEVICES:-0}"
-      -u "$(id -u):$(id -g)"
-      -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt
-      -v "$REPO/inpainting-workflow-master:/workspace/inpainting"
-      -v "$MODELS_COMFYUI_DIR:/workspace/ComfyUI/models:ro"
-      -v "$REPO/p2e-local:/workspace/ComfyUI/custom_nodes/p2e"
-      -v "$COMFYUI_DATA_DIR/output:/workspace/ComfyUI/output"
-      -v "$COMFYUI_DATA_DIR/output-sam3-mask:/workspace/output-sam3-mask"
-      -v "$COMFYUI_DATA_DIR/output-postprocessed:/workspace/output-postprocessed"
-    )
-    if [ -d "$TORCH_CACHE_DIR" ]; then
-      POST_DOCKER_ARGS+=( -v "$TORCH_CACHE_DIR:/root/.cache/torch" )
-    fi
-    docker run "${POST_DOCKER_ARGS[@]}" "$COMFY_IMAGE" \
-      python /workspace/inpainting/postprocess.py \
-      -i /workspace/ComfyUI/output/$BATCH_NAME \
-      -o /workspace/output-postprocessed/$BATCH_NAME \
-      --top-mask /workspace/inpainting/sky_mask_updated.png \
-      --sam3-mask-dir /workspace/output-sam3-mask/$BATCH_NAME \
-      --dilation "$LAPLACIAN_DILATION" \
-      --blur "$LAPLACIAN_BLUR" \
-      --levels "$LAPLACIAN_LEVELS" \
-      --pattern "*.jpg" \
-      -j "$POSTPROCESS_WORKERS"
-  fi
-  E_POST=$(date +%s)
-  POSTPROCESS_SEC=$((E_POST - S_POST))
-  echo "=== STAGE_END postprocess elapsed_sec=$POSTPROCESS_SEC ==="
-
-  if [ "$STOP_AFTER_STAGE" = "postprocess" ]; then
-    echo "=== STAGE_SKIP egoblur reason=STOP_AFTER_STAGE=postprocess elapsed_sec=0 ==="
-  else
-    S_EGO=$(date +%s)
-    echo "=== STAGE_START egoblur ==="
-    PRIVACY_RUNNER="$REPO/inpainting-workflow-master/privacy_blur_parallel.sh"
-    if [ ! -f "$PRIVACY_RUNNER" ]; then
-      echo "ERROR: Privacy blur runner not found at $PRIVACY_RUNNER"
-      exit 1
+    if [ "$STOP_AFTER_STAGE" = "egoblur" ]; then
+      ensure_privacy_python_ready
     fi
 
-    RUN_NAME="privacy-${RUN_ID}" \
-    SRC="$OUT2" \
-    OUT_ROOT="$OUT3" \
-    WORKERS="$PRIVACY_WORKERS" \
-    FACE_MODEL="$PRIVACY_FACE_MODEL" \
-    LP_MODEL="$PRIVACY_LP_MODEL" \
-    FACE_CONF="$PRIVACY_FACE_CONF" \
-    LP_CONF="$PRIVACY_LP_CONF" \
-    FACE_IOU="$PRIVACY_FACE_IOU" \
-    FACE_IMGSZ="$PRIVACY_FACE_IMGSZ" \
-    DET_FACE_W="$PRIVACY_DET_FACE_W" \
-    P360_DEVICE="$PRIVACY_P360_DEVICE" \
-    BLUR_SCOPE="$PRIVACY_BLUR_SCOPE" \
-    BLUR_BACKEND="$PRIVACY_BLUR_BACKEND" \
-    OUTPUT_MODE="$PRIVACY_OUTPUT_MODE" \
-    PYTHON_BIN="$PRIVACY_PYTHON_BIN" \
-    STRICT_HARDLINK="$STRICT_HARDLINK" \
-    bash "$PRIVACY_RUNNER"
+    if [ "$DOWNSTREAM_MODE" = "isolated" ]; then
+      stop_comfy_containers_for_downstream
+    fi
 
-    E_EGO=$(date +%s)
-    EGOBLUR_SEC=$((E_EGO - S_EGO))
-    echo "=== STAGE_END egoblur elapsed_sec=$EGOBLUR_SEC ==="
+    S_POST=$(date +%s)
+    echo "=== STAGE_START postprocess ==="
+    if [ "$DOWNSTREAM_MODE" = "inline" ]; then
+      docker exec \
+        -u "$(id -u):$(id -g)" \
+        -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt \
+        "$CONTAINER_NAME" \
+        python /workspace/inpainting/postprocess.py \
+        -i /workspace/ComfyUI/output/$BATCH_NAME \
+        -o /workspace/output-postprocessed/$BATCH_NAME \
+        --top-mask /workspace/inpainting/sky_mask_updated.png \
+        --sam3-mask-dir /workspace/output-sam3-mask/$BATCH_NAME \
+        --dilation "$LAPLACIAN_DILATION" \
+        --blur "$LAPLACIAN_BLUR" \
+        --levels "$LAPLACIAN_LEVELS" \
+        --pattern "*.jpg" \
+        -j "$POSTPROCESS_WORKERS"
+    else
+      POST_DOCKER_ARGS=(
+        --rm
+        --name "postprocess-${RUN_ID}"
+        --gpus "device=${NVIDIA_VISIBLE_DEVICES:-0}"
+        -u "$(id -u):$(id -g)"
+        -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt
+        -v "$REPO/inpainting-workflow-master:/workspace/inpainting"
+        -v "$MODELS_COMFYUI_DIR:/workspace/ComfyUI/models:ro"
+        -v "$REPO/p2e-local:/workspace/ComfyUI/custom_nodes/p2e"
+        -v "$COMFYUI_DATA_DIR/output:/workspace/ComfyUI/output"
+        -v "$COMFYUI_DATA_DIR/output-sam3-mask:/workspace/output-sam3-mask"
+        -v "$COMFYUI_DATA_DIR/output-postprocessed:/workspace/output-postprocessed"
+      )
+      if [ -d "$TORCH_CACHE_DIR" ]; then
+        POST_DOCKER_ARGS+=( -v "$TORCH_CACHE_DIR:/root/.cache/torch" )
+      fi
+      docker run "${POST_DOCKER_ARGS[@]}" "$COMFY_IMAGE" \
+        python /workspace/inpainting/postprocess.py \
+        -i /workspace/ComfyUI/output/$BATCH_NAME \
+        -o /workspace/output-postprocessed/$BATCH_NAME \
+        --top-mask /workspace/inpainting/sky_mask_updated.png \
+        --sam3-mask-dir /workspace/output-sam3-mask/$BATCH_NAME \
+        --dilation "$LAPLACIAN_DILATION" \
+        --blur "$LAPLACIAN_BLUR" \
+        --levels "$LAPLACIAN_LEVELS" \
+        --pattern "*.jpg" \
+        -j "$POSTPROCESS_WORKERS"
+    fi
+    E_POST=$(date +%s)
+    POSTPROCESS_SEC=$((E_POST - S_POST))
+    echo "=== STAGE_END postprocess elapsed_sec=$POSTPROCESS_SEC ==="
+
+    if [ "$STOP_AFTER_STAGE" = "postprocess" ]; then
+      echo "=== STAGE_SKIP egoblur reason=STOP_AFTER_STAGE=postprocess elapsed_sec=0 ==="
+    else
+      S_EGO=$(date +%s)
+      echo "=== STAGE_START egoblur ==="
+      PRIVACY_RUNNER="$REPO/inpainting-workflow-master/privacy_blur_parallel.sh"
+      if [ ! -f "$PRIVACY_RUNNER" ]; then
+        echo "ERROR: Privacy blur runner not found at $PRIVACY_RUNNER"
+        exit 1
+      fi
+
+      RUN_NAME="privacy-${RUN_ID}" \
+      SRC="$OUT2" \
+      OUT_ROOT="$OUT3" \
+      WORKERS="$PRIVACY_WORKERS" \
+      FACE_MODEL="$PRIVACY_FACE_MODEL" \
+      LP_MODEL="$PRIVACY_LP_MODEL" \
+      FACE_CONF="$PRIVACY_FACE_CONF" \
+      LP_CONF="$PRIVACY_LP_CONF" \
+      FACE_IOU="$PRIVACY_FACE_IOU" \
+      FACE_IMGSZ="$PRIVACY_FACE_IMGSZ" \
+      DET_FACE_W="$PRIVACY_DET_FACE_W" \
+      P360_DEVICE="$PRIVACY_P360_DEVICE" \
+      BLUR_SCOPE="$PRIVACY_BLUR_SCOPE" \
+      BLUR_BACKEND="$PRIVACY_BLUR_BACKEND" \
+      OUTPUT_MODE="$PRIVACY_OUTPUT_MODE" \
+      PYTHON_BIN="$PRIVACY_PYTHON_BIN" \
+      STRICT_HARDLINK="$STRICT_HARDLINK" \
+      bash "$PRIVACY_RUNNER"
+
+      E_EGO=$(date +%s)
+      EGOBLUR_SEC=$((E_EGO - S_EGO))
+      echo "=== STAGE_END egoblur elapsed_sec=$EGOBLUR_SEC ==="
+    fi
   fi
 fi
 

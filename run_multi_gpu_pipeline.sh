@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export PATH="$HOME/.local/bin:$PATH"
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -41,7 +43,7 @@ Forwarded to each shard run_full_pipeline.sh invocation (per GPU):
   LAPLACIAN_DILATION, LAPLACIAN_BLUR, LAPLACIAN_LEVELS,
   DOWNSTREAM_MODE (default: isolated), STOP_AFTER_STAGE (default: egoblur),
   COMFY_READY_TIMEOUT, COMFY_READY_POLL,
-  AUTO_INSTALL_NVIDIA_TOOLKIT, NVIDIA_CUDA_TEST_IMAGE, COMFY_IMAGE, TORCH_CACHE_DIR.
+  NVIDIA_CUDA_TEST_IMAGE, COMFY_IMAGE, TORCH_CACHE_DIR.
   RESET_CONTAINER_BEFORE_RUN (default: 1 in this launcher).
 
 Notes:
@@ -74,7 +76,7 @@ fi
 RUN_NAME="${RUN_NAME:-multigpu-$(date +%Y%m%d_%H%M%S)}"
 GPU_IDS_RAW="${GPU_IDS:-auto}"
 MAX_GPUS="${MAX_GPUS:-0}"
-BASE_COMFY_PORT="${BASE_COMFY_PORT:-8188}"
+BASE_COMFY_PORT="${BASE_COMFY_PORT:-8180}"
 CONTAINER_PREFIX="${CONTAINER_PREFIX:-comfyui-g}"
 COMFYUI_DATA_ROOT="${COMFYUI_DATA_ROOT:-$REPO/comfyui_data}"
 TMUX_SESSION_PREFIX="${TMUX_SESSION_PREFIX:-mgpu}"
@@ -262,6 +264,50 @@ echo "STRICT_HARDLINK=$STRICT_HARDLINK"
 echo "DRY_RUN=$DRY_RUN"
 echo "SINGLE_GPU_CONFLICT_MODE=$SINGLE_GPU_CONFLICT_MODE"
 
+install_nvidia_container_toolkit_once() {
+  if command -v nvidia-container-cli >/dev/null 2>&1; then
+    echo "NVIDIA Container Toolkit already installed."
+    return 0
+  fi
+
+  echo "Installing NVIDIA Container Toolkit..."
+
+  if command -v sudo >/dev/null 2>&1; then
+    SUDO=sudo
+  else
+    SUDO=
+  fi
+
+  $SUDO sh -c 'apt-get update && apt-get install -y curl gpg ca-certificates' 2>/dev/null || true
+  $SUDO mkdir -p /usr/share/keyrings 2>/dev/null || true
+  curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | $SUDO gpg --dearmor --batch --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null || true
+
+  if [ -f /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg ]; then
+    echo "deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/deb/amd64" | $SUDO tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null
+  else
+    wget -qO- https://nvidia.github.io/libnvidia-container/gpgkey | $SUDO apt-key add - 2>/dev/null || true
+    echo "deb https://nvidia.github.io/libnvidia-container/stable/deb/amd64 /" | $SUDO tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null
+  fi
+
+  $SUDO apt-get update 2>/dev/null || true
+  $SUDO apt-get install -y nvidia-container-toolkit 2>/dev/null || true
+  $SUDO nvidia-ctk runtime configure --runtime=docker 2>/dev/null || true
+  $SUDO systemctl restart docker 2>/dev/null || true
+
+  if command -v nvidia-container-cli >/dev/null 2>&1; then
+    echo "NVIDIA Container Toolkit installed successfully."
+  else
+    echo "WARNING: NVIDIA Container Toolkit installation may have failed."
+  fi
+}
+
+echo "Checking NVIDIA Container Toolkit..."
+if ! docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 nvidia-smi >/dev/null 2>&1; then
+  install_nvidia_container_toolkit_once
+else
+  echo "NVIDIA Container Toolkit already working."
+fi
+
 LAUNCH_PLAN="$WORK_ROOT/launch_plan.tsv"
 : > "$LAUNCH_PLAN"
 
@@ -295,6 +341,7 @@ PY
 #!/usr/bin/env bash
 set -uo pipefail
 cd "$REPO"
+export PATH="$HOME/.local/bin:$PATH"
 export SRC="$shard_dir"
 export INPUT_MODE="staged"
 export BATCH_NAME="$batch_name"
@@ -345,7 +392,6 @@ export SKY_REFERENCE_SOURCE="${SKY_REFERENCE_SOURCE:-$REPO/inpainting-workflow-m
 export SKY_REFERENCE_FILENAME="${SKY_REFERENCE_FILENAME:-chrome_xWUjmfs7m4.png}"
 export COMFY_READY_TIMEOUT="${COMFY_READY_TIMEOUT:-300}"
 export COMFY_READY_POLL="${COMFY_READY_POLL:-2}"
-export AUTO_INSTALL_NVIDIA_TOOLKIT="${AUTO_INSTALL_NVIDIA_TOOLKIT:-1}"
 export NVIDIA_CUDA_TEST_IMAGE="${NVIDIA_CUDA_TEST_IMAGE:-nvidia/cuda:12.6.0-base-ubuntu22.04}"
 export COMFY_IMAGE="${COMFY_IMAGE:-amanbagrecha/container-comfyui:latest}"
 export TORCH_CACHE_DIR="${TORCH_CACHE_DIR:-$HOME/.cache/torch}"

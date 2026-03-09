@@ -35,7 +35,7 @@ Useful env vars (with defaults):
 - `RUN_NAME` (default: `multigpu-$(date +%Y%m%d_%H%M%S)`)
 - `GPU_IDS` (default: `auto`; supports comma list like `0,1,3`)
 - `MAX_GPUS` (default: `0`, meaning all detected GPUs)
-- `BASE_COMFY_PORT` (default: `8188`)
+- `BASE_COMFY_PORT` (default: `8180`; GPU i uses port BASE_COMFY_PORT+i)
 - `CONTAINER_PREFIX` (default: `comfyui-g`)
 - `COMFYUI_DATA_ROOT` (default: `./comfyui_data`)
 - `TMUX_SESSION_PREFIX` (default: `mgpu`)
@@ -74,7 +74,6 @@ Useful env vars (with defaults):
 - `FORCE_REPROCESS` (default: `0`)
 - `DOWNSTREAM_MODE` (default: `isolated`)
 - `STOP_AFTER_STAGE` (default: `egoblur`; supports `sam3`, `inpainting`, or `postprocess` for partial runs)
-- `AUTO_INSTALL_NVIDIA_TOOLKIT` (default: `1`)
 - `COMFY_READY_TIMEOUT` (default: `300`)
 - `COMFY_READY_POLL` (default: `2`)
 - `NVIDIA_CUDA_TEST_IMAGE` (default: `nvidia/cuda:12.6.0-base-ubuntu22.04`)
@@ -139,7 +138,7 @@ FINAL_OUTPUT_DIR="" \
 RUN_NAME="multigpu-$(date +%Y%m%d_%H%M%S)" \
 GPU_IDS="auto" \
 MAX_GPUS=0 \
-BASE_COMFY_PORT=8188 \
+BASE_COMFY_PORT=8180 \
 CONTAINER_PREFIX="comfyui-g" \
 COMFYUI_DATA_ROOT="./comfyui_data" \
 TMUX_SESSION_PREFIX="mgpu" \
@@ -166,7 +165,6 @@ AUTO_DOWNLOAD_MODELS=1 \
 FORCE_REPROCESS=0 \
 DOWNSTREAM_MODE="isolated" \
 STOP_AFTER_STAGE="egoblur" \
-AUTO_INSTALL_NVIDIA_TOOLKIT=1 \
 COMFY_READY_TIMEOUT=300 \
 COMFY_READY_POLL=2 \
 NVIDIA_CUDA_TEST_IMAGE="nvidia/cuda:12.6.0-base-ubuntu22.04" \

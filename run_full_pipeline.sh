@@ -50,7 +50,6 @@ COMFY_READY_POLL="${COMFY_READY_POLL:-2}"
 RESET_CONTAINER_BEFORE_RUN="${RESET_CONTAINER_BEFORE_RUN:-1}"
 FORCE_REPROCESS="${FORCE_REPROCESS:-0}"
 STRICT_HARDLINK="${STRICT_HARDLINK:-1}"
-AUTO_INSTALL_NVIDIA_TOOLKIT="${AUTO_INSTALL_NVIDIA_TOOLKIT:-1}"
 NVIDIA_CUDA_TEST_IMAGE="${NVIDIA_CUDA_TEST_IMAGE:-nvidia/cuda:12.6.0-base-ubuntu22.04}"
 COMFY_IMAGE_NODE_ID="${COMFY_IMAGE_NODE_ID:-91}"
 COMFY_MASK_NODE_ID="${COMFY_MASK_NODE_ID:-34}"
@@ -80,7 +79,6 @@ echo "NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-unset}"
 echo "COMFY_PORT=${COMFY_PORT:-8188}"
 echo "FORCE_REPROCESS=$FORCE_REPROCESS"
 echo "STRICT_HARDLINK=$STRICT_HARDLINK"
-echo "AUTO_INSTALL_NVIDIA_TOOLKIT=$AUTO_INSTALL_NVIDIA_TOOLKIT"
 echo "POSTPROCESS_WORKERS=$POSTPROCESS_WORKERS"
 echo "EGOBLUR_WORKERS=$EGOBLUR_WORKERS"
 echo "PRIVACY_WORKERS=$PRIVACY_WORKERS"
@@ -204,6 +202,7 @@ fi
 
 ensure_privacy_python_ready() {
   local py_bin="$PRIVACY_PYTHON_BIN"
+  local uv_bin=""
   if [[ ! -x "$py_bin" ]]; then
     if command -v python3 >/dev/null 2>&1; then
       py_bin="$(command -v python3)"
@@ -214,9 +213,21 @@ ensure_privacy_python_ready() {
   fi
   PRIVACY_PYTHON_BIN="$py_bin"
 
-  if ! command -v uv >/dev/null 2>&1; then
-    echo "ERROR: privacy blur stage requires 'uv' but it is not available in PATH."
-    return 1
+  if command -v uv >/dev/null 2>&1; then
+    uv_bin="$(command -v uv)"
+  else
+    if [[ -f "$HOME/.local/bin/env" ]]; then
+      # shellcheck disable=SC1090
+      . "$HOME/.local/bin/env"
+    fi
+    export PATH="$HOME/.local/bin:$PATH"
+    if command -v uv >/dev/null 2>&1; then
+      uv_bin="$(command -v uv)"
+    else
+      echo "ERROR: privacy blur stage requires 'uv' but it is not available in PATH."
+      echo "Install uv via: curl -LsSf https://astral.sh/uv/install.sh | sh"
+      return 1
+    fi
   fi
 
   if "$PRIVACY_PYTHON_BIN" - <<'PY' >/dev/null 2>&1
@@ -232,7 +243,7 @@ PY
   fi
 
   echo "Installing missing privacy blur Python dependencies into $PRIVACY_PYTHON_BIN"
-  uv pip install --python "$PRIVACY_PYTHON_BIN" "open-image-models[onnx-gpu]" ultralytics pytorch360convert
+  "$uv_bin" pip install --python "$PRIVACY_PYTHON_BIN" "open-image-models[onnx-gpu]" ultralytics pytorch360convert
 }
 
 if ! command -v nvidia-smi >/dev/null 2>&1; then
@@ -242,6 +253,10 @@ fi
 
 docker_gpu_ready() {
   docker run --rm --gpus all "$NVIDIA_CUDA_TEST_IMAGE" nvidia-smi >/dev/null 2>&1
+}
+
+nvidia_toolkit_installed() {
+  command -v nvidia-container-cli >/dev/null 2>&1
 }
 
 run_privileged() {
@@ -256,6 +271,11 @@ run_privileged() {
 }
 
 install_nvidia_container_toolkit() {
+  if nvidia_toolkit_installed; then
+    echo "NVIDIA Container Toolkit already installed."
+    return 0
+  fi
+
   if [ ! -r /etc/os-release ]; then
     echo "ERROR: Cannot detect OS (missing /etc/os-release)."
     return 1
@@ -271,14 +291,19 @@ install_nvidia_container_toolkit() {
   run_privileged sh -c 'set -e; apt-get update; apt-get install -y curl gpg ca-certificates'
   run_privileged mkdir -p /usr/share/keyrings
   curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
-    run_privileged gpg --dearmor --batch --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-  curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
-    sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-    run_privileged tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null
-  run_privileged apt-get update
-  run_privileged apt-get install -y nvidia-container-toolkit
-  run_privileged nvidia-ctk runtime configure --runtime=docker
-  run_privileged systemctl restart docker
+    run_privileged gpg --dearmor --batch --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null || true
+  if [ -f /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg ]; then
+    echo "deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/deb/amd64" | \
+      run_privileged tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null
+  else
+    wget -qO- https://nvidia.github.io/libnvidia-container/gpgkey | run_privileged apt-key add - 2>/dev/null || true
+    echo "deb https://nvidia.github.io/libnvidia-container/stable/deb/amd64 /" | \
+      run_privileged tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null
+  fi
+  run_privileged apt-get update || true
+  run_privileged apt-get install -y nvidia-container-toolkit || true
+  run_privileged nvidia-ctk runtime configure --runtime=docker 2>/dev/null || true
+  run_privileged systemctl restart docker 2>/dev/null || true
 }
 
 echo "Checking Docker GPU runtime"
@@ -286,17 +311,12 @@ if docker_gpu_ready; then
   echo "Docker GPU runtime: OK"
 else
   echo "Docker GPU runtime: NOT READY"
-  if [ "$AUTO_INSTALL_NVIDIA_TOOLKIT" = "1" ]; then
-    install_nvidia_container_toolkit
-    if docker_gpu_ready; then
-      echo "Docker GPU runtime: OK after toolkit installation"
-    else
-      echo "ERROR: Docker GPU runtime still not ready after installation attempt."
-      echo "Please verify NVIDIA Container Toolkit + Docker runtime setup manually."
-      exit 1
-    fi
+  install_nvidia_container_toolkit
+  if docker_gpu_ready; then
+    echo "Docker GPU runtime: OK after toolkit installation"
   else
-    echo "ERROR: GPU runtime not ready and AUTO_INSTALL_NVIDIA_TOOLKIT=0"
+    echo "ERROR: Docker GPU runtime still not ready after installation attempt."
+    echo "Please verify NVIDIA Container Toolkit + Docker runtime setup manually."
     exit 1
   fi
 fi
@@ -345,7 +365,20 @@ echo "Staged sky reference image to $SKY_REFERENCE_TARGET"
 if [ "$RESET_CONTAINER_BEFORE_RUN" = "1" ]; then
   if docker ps -a --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
     echo "Resetting existing container before run: $CONTAINER_NAME"
-    docker rm -f "$CONTAINER_NAME" >/dev/null
+    reset_ok=0
+    for attempt in 1 2 3; do
+      if docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1; then
+        reset_ok=1
+        break
+      fi
+      echo "WARN: failed to remove container $CONTAINER_NAME (attempt $attempt/3), retrying..."
+      sleep 3
+    done
+    if [ "$reset_ok" -ne 1 ]; then
+      if docker ps -a --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
+        echo "WARN: could not remove $CONTAINER_NAME; continuing and letting docker compose reconcile state."
+      fi
+    fi
   else
     echo "RESET_CONTAINER_BEFORE_RUN=1: no existing container to reset for $CONTAINER_NAME"
   fi

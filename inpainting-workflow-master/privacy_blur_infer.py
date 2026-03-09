@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import multiprocessing
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
@@ -223,6 +225,211 @@ def write_jpg(path: Path, image_bgr: np.ndarray, quality: int) -> bool:
     return cv2.imwrite(str(path), image_bgr, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
 
 
+def _process_chunk(packed: dict) -> tuple[list, list]:
+    """Worker function run in a subprocess. Loads models and processes image_paths."""
+    image_paths = [Path(p) for p in packed["image_paths"]]
+    output_dir = Path(packed["output_dir"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    p360_device = select_device(packed["p360_device"])
+    if packed["blur_backend"] == "auto":
+        blur_backend = "gpu" if p360_device.type == "cuda" else "cpu"
+    else:
+        blur_backend = packed["blur_backend"]
+    blur_dtype = torch.float16 if p360_device.type == "cuda" else torch.float32
+    face_device = "cuda:0" if p360_device.type == "cuda" else "cpu"
+
+    face_detector = YOLO(packed["face_model"])
+    lp_model_path = Path(packed["lp_model"])
+    if lp_model_path.exists():
+        lp_detector = YoloV9ObjectDetector(
+            model_path=str(lp_model_path),
+            class_labels=["License Plate"],
+            conf_thresh=packed["lp_conf"],
+            providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+        )
+    else:
+        lp_detector = LicensePlateDetector(
+            detection_model=packed["lp_model"],
+            conf_thresh=packed["lp_conf"],
+            providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+        )
+
+    rows_summary: list = []
+    rows_profile: list = []
+
+    for image_path in image_paths:
+        t0 = time.perf_counter()
+        blur_path = output_dir / f"{image_path.stem}_blur.jpg"
+        annot_path = output_dir / f"{image_path.stem}_annot.jpg"
+        if (
+            blur_path.exists()
+            and (packed["output_mode"] == "blur_only" or annot_path.exists())
+            and not packed["overwrite"]
+        ):
+            continue
+
+        t = time.perf_counter()
+        pano = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+        t_read = time.perf_counter() - t
+        if pano is None:
+            print(f"skip unreadable: {image_path.name}", flush=True)
+            continue
+
+        pano_h, pano_w = pano.shape[:2]
+
+        t = time.perf_counter()
+        cube_dict = p360.e2c(
+            bgr_to_tensor(pano, device=p360_device),
+            face_w=packed["det_face_w"],
+            mode="bilinear",
+            cube_format="dict",
+            channels_first=True,
+        )
+        t_e2c = time.perf_counter() - t
+
+        all_dets: List[Tuple[str, int, int, int, int, float, str]] = []
+        image_face_count = 0
+        image_lp_count = 0
+
+        t = time.perf_counter()
+        for face_name in SIDE_FACES:
+            face_bgr = tensor_to_bgr(cube_dict[face_name])
+            face_boxes = detect_faces_ultralytics(
+                detector=face_detector,
+                image_bgr=face_bgr,
+                conf=packed["face_conf"],
+                iou=packed["face_iou"],
+                imgsz=packed["face_imgsz"],
+                device=face_device,
+            )
+            image_face_count += len(face_boxes)
+            for x1, y1, x2, y2, conf in face_boxes:
+                all_dets.append((face_name, x1, y1, x2, y2, conf, "F"))
+        t_detect_face = time.perf_counter() - t
+
+        t = time.perf_counter()
+        for face_name in SIDE_FACES:
+            face_bgr = tensor_to_bgr(cube_dict[face_name])
+            lp_boxes = detect_lp_open_image(detector=lp_detector, image_bgr=face_bgr)
+            image_lp_count += len(lp_boxes)
+            for x1, y1, x2, y2, conf in lp_boxes:
+                all_dets.append((face_name, x1, y1, x2, y2, conf, "LP"))
+        t_detect_lp = time.perf_counter() - t
+
+        annotated_pano = pano.copy() if packed["output_mode"] == "both" else None
+        t_project = 0.0
+        t_blur = 0.0
+
+        if all_dets:
+            t = time.perf_counter()
+            n = len(all_dets)
+            mask_cube: Dict[str, torch.Tensor] = {
+                name: torch.zeros(
+                    (n, packed["det_face_w"], packed["det_face_w"]),
+                    dtype=torch.float32,
+                    device=p360_device,
+                )
+                for name in ALL_FACES
+            }
+            for idx, (face_name, x1, y1, x2, y2, _conf, _typ) in enumerate(all_dets):
+                mask_cube[face_name][idx, y1:y2, x1:x2] = 1.0
+
+            projected = p360.c2e(
+                mask_cube,
+                h=pano_h,
+                w=pano_w,
+                mode="bilinear",
+                cube_format="dict",
+                channels_first=True,
+            )
+
+            mask_t = projected.max(dim=0).values
+            mask = np.clip(mask_t.detach().cpu().numpy(), 0.0, 1.0)
+            if packed["mask_threshold"] > 0:
+                mask = (mask >= packed["mask_threshold"]).astype(np.float32)
+            if packed["mask_feather"] > 0:
+                mask = cv2.GaussianBlur(mask, (0, 0), sigmaX=packed["mask_feather"])
+                mask = np.clip(mask, 0.0, 1.0)
+
+            if annotated_pano is not None:
+                for idx, (_face_name, _x1, _y1, _x2, _y2, conf, typ) in enumerate(all_dets):
+                    single_mask = projected[idx].detach().cpu().numpy()
+                    bw = (single_mask >= packed["mask_threshold"]).astype(np.uint8)
+                    contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    contours = [c for c in contours if cv2.contourArea(c) >= packed["min_contour_area"]]
+                    if not contours:
+                        continue
+                    color = (24, 180, 24) if typ == "F" else (0, 0, 255)
+                    cv2.drawContours(annotated_pano, contours, -1, color, 2)
+                    main_contour = max(contours, key=cv2.contourArea)
+                    m = cv2.moments(main_contour)
+                    if m["m00"] > 0:
+                        cx = int(m["m10"] / m["m00"])
+                        cy = int(m["m01"] / m["m00"])
+                    else:
+                        cx, cy = map(int, main_contour[0][0])
+                    draw_label(annotated_pano, f"{typ} {conf:.2f}", cx, cy, color)
+
+            t_project = time.perf_counter() - t
+
+            t = time.perf_counter()
+            if packed["blur_scope"] == "roi":
+                out_blur = apply_roi_blur_bgr(
+                    image_bgr_u8=pano,
+                    mask_f32=mask,
+                    sigma=packed["blur_sigma"],
+                    blur_backend=blur_backend,
+                    device=p360_device,
+                    dtype=blur_dtype,
+                    roi_pad=packed["roi_pad"],
+                    roi_min_area=packed["roi_min_area"],
+                    roi_mask_threshold=packed["roi_mask_threshold"],
+                )
+            else:
+                if blur_backend == "gpu":
+                    blurred = gaussian_blur_gpu_bgr(
+                        image_bgr_u8=pano, sigma=packed["blur_sigma"],
+                        device=p360_device, dtype=blur_dtype,
+                    )
+                else:
+                    blurred = cv2.GaussianBlur(pano, (0, 0), sigmaX=packed["blur_sigma"])
+                mask3 = mask[..., None]
+                out_blur = (pano.astype(np.float32) * (1.0 - mask3)) + (blurred.astype(np.float32) * mask3)
+                out_blur = np.clip(out_blur, 0, 255).astype(np.uint8)
+            t_blur = time.perf_counter() - t
+        else:
+            out_blur = pano
+
+        t = time.perf_counter()
+        if not write_jpg(blur_path, out_blur, quality=packed["jpg_quality"]):
+            print(f"failed write: {blur_path}", flush=True)
+            continue
+        if annotated_pano is not None:
+            if not write_jpg(annot_path, annotated_pano, quality=packed["jpg_quality"]):
+                print(f"failed write: {annot_path}", flush=True)
+                continue
+        t_write = time.perf_counter() - t
+
+        elapsed = time.perf_counter() - t0
+        print(
+            f"[w{packed['worker_id']}] ok {image_path.name} face={image_face_count} lp={image_lp_count} sec={elapsed:.2f}",
+            flush=True,
+        )
+        rows_summary.append([
+            image_path.name, str(image_face_count), str(image_lp_count),
+            str(image_face_count + image_lp_count), f"{elapsed:.6f}",
+            str(blur_path), str(annot_path) if annotated_pano is not None else "",
+        ])
+        rows_profile.append([
+            image_path.name, f"{t_read:.6f}", f"{t_e2c:.6f}",
+            f"{t_detect_face:.6f}", f"{t_detect_lp:.6f}",
+            f"{t_project:.6f}", f"{t_blur:.6f}", f"{t_write:.6f}", f"{elapsed:.6f}",
+        ])
+
+    return rows_summary, rows_profile
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Final face+license-plate blur pipeline (debug + production modes)"
@@ -282,6 +489,8 @@ def main() -> None:
         help="both = blur + annotated output; blur_only = production output",
     )
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--workers", default=1, type=int,
+                        help="Number of parallel worker processes (each loads its own models)")
     args = parser.parse_args()
 
     if not args.input_dir.exists():
@@ -297,312 +506,88 @@ def main() -> None:
     summary_csv = args.output_dir / "summary.csv"
     profile_csv = args.output_dir / "profile.csv"
 
-    p360_device = select_device(args.p360_device)
-    if args.blur_backend == "auto":
-        blur_backend = "gpu" if p360_device.type == "cuda" else "cpu"
-    else:
-        blur_backend = args.blur_backend
-    if blur_backend == "gpu" and p360_device.type != "cuda":
-        raise SystemExit("blur-backend=gpu requires CUDA device for p360")
-    blur_dtype = torch.float16 if p360_device.type == "cuda" else torch.float32
+    # Build a serialisable param dict shared across all workers.
+    params = dict(
+        output_dir=str(args.output_dir),
+        face_model=str(args.face_model),
+        lp_model=str(args.lp_model),
+        face_conf=args.face_conf, lp_conf=args.lp_conf,
+        face_iou=args.face_iou, face_imgsz=args.face_imgsz,
+        det_face_w=args.det_face_w,
+        p360_device=args.p360_device,
+        blur_backend=args.blur_backend, blur_scope=args.blur_scope,
+        blur_sigma=args.blur_sigma,
+        mask_threshold=args.mask_threshold, mask_feather=args.mask_feather,
+        roi_pad=args.roi_pad, roi_min_area=args.roi_min_area,
+        roi_mask_threshold=args.roi_mask_threshold,
+        min_contour_area=args.min_contour_area,
+        jpg_quality=args.jpg_quality,
+        output_mode=args.output_mode,
+        overwrite=args.overwrite,
+    )
 
-    face_device = "cuda:0" if p360_device.type == "cuda" else "cpu"
-    face_detector = YOLO(str(args.face_model))
-    lp_model_path = Path(args.lp_model)
-    if lp_model_path.exists():
-        lp_detector = YoloV9ObjectDetector(
-            model_path=str(lp_model_path),
-            class_labels=["License Plate"],
-            conf_thresh=args.lp_conf,
-            providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
-        )
-    else:
-        lp_detector = LicensePlateDetector(
-            detection_model=args.lp_model,
-            conf_thresh=args.lp_conf,
-            providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
-        )
+    workers = max(1, args.workers)
+    # Split images into chunks — one chunk per worker.
+    chunks: list[list[str]] = [[] for _ in range(workers)]
+    for i, img in enumerate(images):
+        chunks[i % workers].append(str(img))
+
+    work_items = [
+        {**params, "image_paths": chunk, "worker_id": i}
+        for i, chunk in enumerate(chunks)
+        if chunk
+    ]
 
     rows_summary: List[List[str]] = []
     rows_profile: List[List[str]] = []
 
-    total_face = 0
-    total_lp = 0
-    total_elapsed = 0.0
-    total_read = 0.0
-    total_e2c = 0.0
-    total_detect_face = 0.0
-    total_detect_lp = 0.0
-    total_project = 0.0
-    total_blur = 0.0
-    total_write = 0.0
+    if len(work_items) == 1:
+        # Single worker — run in-process, no subprocess overhead.
+        rs, rp = _process_chunk(work_items[0])
+        rows_summary.extend(rs)
+        rows_profile.extend(rp)
+    else:
+        ctx = multiprocessing.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
+            futures = {pool.submit(_process_chunk, item): item["worker_id"] for item in work_items}
+            for fut in as_completed(futures):
+                wid = futures[fut]
+                try:
+                    rs, rp = fut.result()
+                    rows_summary.extend(rs)
+                    rows_profile.extend(rp)
+                except Exception as exc:
+                    raise SystemExit(f"worker {wid} failed: {exc}") from exc
 
-    for image_path in images:
-        t0 = time.perf_counter()
-        blur_path = args.output_dir / f"{image_path.stem}_blur.jpg"
-        annot_path = args.output_dir / f"{image_path.stem}_annot.jpg"
-        if (
-            blur_path.exists()
-            and (args.output_mode == "blur_only" or annot_path.exists())
-            and not args.overwrite
-        ):
-            continue
-
-        t = time.perf_counter()
-        pano = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
-        t_read = time.perf_counter() - t
-        if pano is None:
-            print(f"skip unreadable: {image_path.name}")
-            continue
-
-        pano_h, pano_w = pano.shape[:2]
-
-        t = time.perf_counter()
-        cube_dict = p360.e2c(
-            bgr_to_tensor(pano, device=p360_device),
-            face_w=args.det_face_w,
-            mode="bilinear",
-            cube_format="dict",
-            channels_first=True,
-        )
-        t_e2c = time.perf_counter() - t
-
-        # (face_name, x1, y1, x2, y2, conf, type)
-        all_dets: List[Tuple[str, int, int, int, int, float, str]] = []
-        image_face_count = 0
-        image_lp_count = 0
-
-        t = time.perf_counter()
-        for face_name in SIDE_FACES:
-            face_bgr = tensor_to_bgr(cube_dict[face_name])
-            face_boxes = detect_faces_ultralytics(
-                detector=face_detector,
-                image_bgr=face_bgr,
-                conf=args.face_conf,
-                iou=args.face_iou,
-                imgsz=args.face_imgsz,
-                device=face_device,
-            )
-            image_face_count += len(face_boxes)
-            for x1, y1, x2, y2, conf in face_boxes:
-                all_dets.append((face_name, x1, y1, x2, y2, conf, "F"))
-        t_detect_face = time.perf_counter() - t
-
-        t = time.perf_counter()
-        for face_name in SIDE_FACES:
-            face_bgr = tensor_to_bgr(cube_dict[face_name])
-            lp_boxes = detect_lp_open_image(
-                detector=lp_detector,
-                image_bgr=face_bgr,
-            )
-            image_lp_count += len(lp_boxes)
-            for x1, y1, x2, y2, conf in lp_boxes:
-                all_dets.append((face_name, x1, y1, x2, y2, conf, "LP"))
-        t_detect_lp = time.perf_counter() - t
-
-        annotated_pano = pano.copy() if args.output_mode == "both" else None
-        t_project = 0.0
-        t_blur = 0.0
-
-        if all_dets:
-            t = time.perf_counter()
-            n = len(all_dets)
-            mask_cube: Dict[str, torch.Tensor] = {
-                name: torch.zeros(
-                    (n, args.det_face_w, args.det_face_w),
-                    dtype=torch.float32,
-                    device=p360_device,
-                )
-                for name in ALL_FACES
-            }
-            for idx, (face_name, x1, y1, x2, y2, _conf, _typ) in enumerate(all_dets):
-                mask_cube[face_name][idx, y1:y2, x1:x2] = 1.0
-
-            projected = p360.c2e(
-                mask_cube,
-                h=pano_h,
-                w=pano_w,
-                mode="bilinear",
-                cube_format="dict",
-                channels_first=True,
-            )
-
-            mask_t = projected.max(dim=0).values
-            mask = np.clip(mask_t.detach().cpu().numpy(), 0.0, 1.0)
-            if args.mask_threshold > 0:
-                mask = (mask >= args.mask_threshold).astype(np.float32)
-            if args.mask_feather > 0:
-                mask = cv2.GaussianBlur(mask, (0, 0), sigmaX=args.mask_feather)
-                mask = np.clip(mask, 0.0, 1.0)
-
-            if annotated_pano is not None:
-                for idx, (_face_name, _x1, _y1, _x2, _y2, conf, typ) in enumerate(
-                    all_dets
-                ):
-                    single_mask = projected[idx].detach().cpu().numpy()
-                    bw = (single_mask >= args.mask_threshold).astype(np.uint8)
-                    contours, _ = cv2.findContours(
-                        bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-                    )
-                    contours = [
-                        c
-                        for c in contours
-                        if cv2.contourArea(c) >= args.min_contour_area
-                    ]
-                    if not contours:
-                        continue
-
-                    color = (24, 180, 24) if typ == "F" else (0, 0, 255)
-                    cv2.drawContours(annotated_pano, contours, -1, color, 2)
-                    main_contour = max(contours, key=cv2.contourArea)
-                    m = cv2.moments(main_contour)
-                    if m["m00"] > 0:
-                        cx = int(m["m10"] / m["m00"])
-                        cy = int(m["m01"] / m["m00"])
-                    else:
-                        cx, cy = map(int, main_contour[0][0])
-                    draw_label(annotated_pano, f"{typ} {conf:.2f}", cx, cy, color)
-
-            t_project = time.perf_counter() - t
-
-            t = time.perf_counter()
-            if args.blur_scope == "roi":
-                out_blur = apply_roi_blur_bgr(
-                    image_bgr_u8=pano,
-                    mask_f32=mask,
-                    sigma=args.blur_sigma,
-                    blur_backend=blur_backend,
-                    device=p360_device,
-                    dtype=blur_dtype,
-                    roi_pad=args.roi_pad,
-                    roi_min_area=args.roi_min_area,
-                    roi_mask_threshold=args.roi_mask_threshold,
-                )
-            else:
-                if blur_backend == "gpu":
-                    blurred = gaussian_blur_gpu_bgr(
-                        image_bgr_u8=pano,
-                        sigma=args.blur_sigma,
-                        device=p360_device,
-                        dtype=blur_dtype,
-                    )
-                else:
-                    blurred = cv2.GaussianBlur(pano, (0, 0), sigmaX=args.blur_sigma)
-                mask3 = mask[..., None]
-                out_blur = (pano.astype(np.float32) * (1.0 - mask3)) + (
-                    blurred.astype(np.float32) * mask3
-                )
-                out_blur = np.clip(out_blur, 0, 255).astype(np.uint8)
-            t_blur = time.perf_counter() - t
-        else:
-            out_blur = pano
-
-        t = time.perf_counter()
-        if not write_jpg(blur_path, out_blur, quality=args.jpg_quality):
-            print(f"failed write: {blur_path}")
-            continue
-        if annotated_pano is not None:
-            if not write_jpg(annot_path, annotated_pano, quality=args.jpg_quality):
-                print(f"failed write: {annot_path}")
-                continue
-        t_write = time.perf_counter() - t
-
-        elapsed = time.perf_counter() - t0
-        total_face += image_face_count
-        total_lp += image_lp_count
-        total_elapsed += elapsed
-        total_read += t_read
-        total_e2c += t_e2c
-        total_detect_face += t_detect_face
-        total_detect_lp += t_detect_lp
-        total_project += t_project
-        total_blur += t_blur
-        total_write += t_write
-
-        rows_summary.append(
-            [
-                image_path.name,
-                str(image_face_count),
-                str(image_lp_count),
-                str(image_face_count + image_lp_count),
-                f"{elapsed:.6f}",
-                str(blur_path),
-                str(annot_path) if annotated_pano is not None else "",
-            ]
-        )
-
-        rows_profile.append(
-            [
-                image_path.name,
-                f"{t_read:.6f}",
-                f"{t_e2c:.6f}",
-                f"{t_detect_face:.6f}",
-                f"{t_detect_lp:.6f}",
-                f"{t_project:.6f}",
-                f"{t_blur:.6f}",
-                f"{t_write:.6f}",
-                f"{elapsed:.6f}",
-            ]
-        )
-
-        print(
-            f"ok {image_path.name} face={image_face_count} lp={image_lp_count} total={image_face_count + image_lp_count} sec={elapsed:.2f}"
-        )
+    rows_summary.sort(key=lambda r: r[0])
+    rows_profile.sort(key=lambda r: r[0])
 
     with summary_csv.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(
-            [
-                "image",
-                "face_boxes",
-                "lp_boxes",
-                "total_boxes",
-                "elapsed_sec",
-                "blur_output",
-                "annot_output",
-            ]
-        )
+        w.writerow(["image", "face_boxes", "lp_boxes", "total_boxes", "elapsed_sec", "blur_output", "annot_output"])
         w.writerows(rows_summary)
 
     with profile_csv.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(
-            [
-                "image",
-                "read_sec",
-                "e2c_sec",
-                "detect_face_sec",
-                "detect_lp_sec",
-                "project_sec",
-                "blur_sec",
-                "write_sec",
-                "total_sec",
-            ]
-        )
+        w.writerow(["image", "read_sec", "e2c_sec", "detect_face_sec", "detect_lp_sec", "project_sec", "blur_sec", "write_sec", "total_sec"])
         w.writerows(rows_profile)
 
     processed = len(rows_summary)
+    total_face = sum(int(float(r[1])) for r in rows_summary)
+    total_lp = sum(int(float(r[2])) for r in rows_summary)
+    total_elapsed = sum(float(r[4]) for r in rows_summary)
+    profile_cols = ["read_sec", "e2c_sec", "detect_face_sec", "detect_lp_sec", "project_sec", "blur_sec", "write_sec"]
+    col_sums = [sum(float(r[i + 1]) for r in rows_profile) for i in range(len(profile_cols))]
+
     print(f"processed_images={processed}")
     print(f"total_face_boxes={total_face}")
     print(f"total_lp_boxes={total_lp}")
     print(f"total_boxes={total_face + total_lp}")
     print(f"elapsed_sec={total_elapsed:.2f}")
     print(f"avg_sec_per_image={(total_elapsed / processed) if processed else 0.0:.4f}")
-    print(f"avg_read_sec={(total_read / processed) if processed else 0.0:.4f}")
-    print(f"avg_e2c_sec={(total_e2c / processed) if processed else 0.0:.4f}")
-    print(
-        f"avg_detect_face_sec={(total_detect_face / processed) if processed else 0.0:.4f}"
-    )
-    print(
-        f"avg_detect_lp_sec={(total_detect_lp / processed) if processed else 0.0:.4f}"
-    )
-    print(f"avg_project_sec={(total_project / processed) if processed else 0.0:.4f}")
-    print(f"avg_blur_sec={(total_blur / processed) if processed else 0.0:.4f}")
-    print(f"avg_write_sec={(total_write / processed) if processed else 0.0:.4f}")
-    print(f"p360_device={p360_device}")
-    print(f"blur_scope={args.blur_scope}")
-    print(f"blur_backend={blur_backend}")
-    print(f"output_mode={args.output_mode}")
+    for name, s in zip(profile_cols, col_sums):
+        print(f"avg_{name}={(s / processed) if processed else 0.0:.4f}")
+    print(f"workers={workers}")
     print(f"output_dir={args.output_dir}")
     print(f"summary_csv={summary_csv}")
     print(f"profile_csv={profile_csv}")

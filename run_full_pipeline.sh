@@ -668,30 +668,22 @@ PY
     else
       S_EGO=$(date +%s)
       echo "=== STAGE_START egoblur ==="
-      PRIVACY_RUNNER="$REPO/inpainting-workflow-master/privacy_blur_parallel.sh"
-      if [ ! -f "$PRIVACY_RUNNER" ]; then
-        echo "ERROR: Privacy blur runner not found at $PRIVACY_RUNNER"
-        exit 1
-      fi
-
-      RUN_NAME="privacy-${RUN_ID}" \
-      SRC="$OUT2" \
-      OUT_ROOT="$OUT3" \
-      WORKERS="$PRIVACY_WORKERS" \
-      FACE_MODEL="$PRIVACY_FACE_MODEL" \
-      LP_MODEL="$PRIVACY_LP_MODEL" \
-      FACE_CONF="$PRIVACY_FACE_CONF" \
-      LP_CONF="$PRIVACY_LP_CONF" \
-      FACE_IOU="$PRIVACY_FACE_IOU" \
-      FACE_IMGSZ="$PRIVACY_FACE_IMGSZ" \
-      DET_FACE_W="$PRIVACY_DET_FACE_W" \
-      P360_DEVICE="$PRIVACY_P360_DEVICE" \
-      BLUR_SCOPE="$PRIVACY_BLUR_SCOPE" \
-      BLUR_BACKEND="$PRIVACY_BLUR_BACKEND" \
-      OUTPUT_MODE="$PRIVACY_OUTPUT_MODE" \
-      PYTHON_BIN="$PRIVACY_PYTHON_BIN" \
-      STRICT_HARDLINK="$STRICT_HARDLINK" \
-      bash "$PRIVACY_RUNNER"
+      "$PRIVACY_PYTHON_BIN" "$REPO/inpainting-workflow-master/privacy_blur_infer.py" \
+        --input-dir   "$OUT2" \
+        --output-dir  "$OUT3" \
+        --face-model  "$PRIVACY_FACE_MODEL" \
+        --lp-model    "$PRIVACY_LP_MODEL" \
+        --face-conf   "$PRIVACY_FACE_CONF" \
+        --lp-conf     "$PRIVACY_LP_CONF" \
+        --face-iou    "$PRIVACY_FACE_IOU" \
+        --face-imgsz  "$PRIVACY_FACE_IMGSZ" \
+        --det-face-w  "$PRIVACY_DET_FACE_W" \
+        --p360-device "$PRIVACY_P360_DEVICE" \
+        --blur-scope  "$PRIVACY_BLUR_SCOPE" \
+        --blur-backend "$PRIVACY_BLUR_BACKEND" \
+        --output-mode "$PRIVACY_OUTPUT_MODE" \
+        --workers     "$PRIVACY_WORKERS" \
+        --overwrite
 
       E_EGO=$(date +%s)
       EGOBLUR_SEC=$((E_EGO - S_EGO))

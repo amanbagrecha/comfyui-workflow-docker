@@ -78,6 +78,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     htop \
     nvtop \
+    git \
+    wget \
+    curl \
+    python3 \
+    python3-pip \
+    python3-dev \
+    build-essential \
     libgl1-mesa-glx \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
@@ -89,6 +96,7 @@ COPY --from=builder /workspace/.venv        /workspace/.venv
 COPY --from=builder /workspace/ComfyUI      /workspace/ComfyUI
 COPY --from=builder /workspace/p2e-lib      /workspace/p2e-lib
 COPY --from=builder /workspace/inpainting   /workspace/inpainting
+COPY --from=builder /root/.config           /root/.config
 
 ENV PATH="/workspace/.venv/bin:$PATH"
 ENV PYTHONPATH="/workspace/p2e-lib:/workspace/ComfyUI"

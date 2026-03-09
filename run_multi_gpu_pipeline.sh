@@ -362,8 +362,8 @@ else
   echo "All required models present."
 fi
 
-echo "Pulling Docker image..."
 _comfy_image="${COMFY_IMAGE:-amanbagrecha/container-comfyui:latest}"
+echo "Pulling Docker image..."
 docker pull "$_comfy_image"
 
 LAUNCH_PLAN="$WORK_ROOT/launch_plan.tsv"

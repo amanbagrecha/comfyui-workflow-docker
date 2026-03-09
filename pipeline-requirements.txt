@@ -1,0 +1,23 @@
+# Pipeline-specific Python dependencies
+# Baked into the Docker image at build time.
+# To update: edit this file and rebuild the image.
+
+# Numerics / image processing
+numba
+opencv-contrib-python
+opencv-python
+
+# Inpainting
+simple-lama-inpainting
+
+# Utilities
+click
+requests
+tqdm
+
+# Privacy blur + object detection
+ultralytics
+open-image-models[onnx-gpu]
+
+# 360 panorama conversion
+pytorch360convert

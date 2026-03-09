@@ -288,12 +288,13 @@ install_nvidia_container_toolkit() {
   fi
 
   echo "Installing NVIDIA Container Toolkit..."
+  run_privileged rm -f /etc/apt/sources.list.d/nvidia-container-toolkit.list
   run_privileged sh -c 'set -e; apt-get update; apt-get install -y curl gpg ca-certificates'
   run_privileged mkdir -p /usr/share/keyrings
   curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
     run_privileged gpg --dearmor --batch --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null || true
   if [ -f /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg ]; then
-    echo "deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/deb/amd64" | \
+    echo "deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/deb/amd64 /" | \
       run_privileged tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null
   else
     wget -qO- https://nvidia.github.io/libnvidia-container/gpgkey | run_privileged apt-key add - 2>/dev/null || true
@@ -306,46 +307,50 @@ install_nvidia_container_toolkit() {
   run_privileged systemctl restart docker 2>/dev/null || true
 }
 
-echo "Checking Docker GPU runtime"
-if docker_gpu_ready; then
-  echo "Docker GPU runtime: OK"
+if [ "${SKIP_PREFLIGHT:-0}" = "1" ]; then
+  echo "Skipping preflight checks (handled by orchestrator)"
 else
-  echo "Docker GPU runtime: NOT READY"
-  install_nvidia_container_toolkit
+  echo "Checking Docker GPU runtime"
   if docker_gpu_ready; then
-    echo "Docker GPU runtime: OK after toolkit installation"
+    echo "Docker GPU runtime: OK"
   else
-    echo "ERROR: Docker GPU runtime still not ready after installation attempt."
-    echo "Please verify NVIDIA Container Toolkit + Docker runtime setup manually."
-    exit 1
+    echo "Docker GPU runtime: NOT READY"
+    install_nvidia_container_toolkit
+    if docker_gpu_ready; then
+      echo "Docker GPU runtime: OK after toolkit installation"
+    else
+      echo "ERROR: Docker GPU runtime still not ready after installation attempt."
+      echo "Please verify NVIDIA Container Toolkit + Docker runtime setup manually."
+      exit 1
+    fi
   fi
-fi
 
-required_files=(
-  "$MODELS_COMFYUI_DIR/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"
-  "$MODELS_COMFYUI_DIR/vae/qwen_image_vae.safetensors"
-  "$MODELS_COMFYUI_DIR/diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors"
-  "$MODELS_COMFYUI_DIR/sam3/model.safetensors"
-  "$MODELS_COMFYUI_DIR/lama/big-lama.pt"
-  "$PRIVACY_FACE_MODEL"
-  "$PRIVACY_LP_MODEL"
-)
+  required_files=(
+    "$MODELS_COMFYUI_DIR/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"
+    "$MODELS_COMFYUI_DIR/vae/qwen_image_vae.safetensors"
+    "$MODELS_COMFYUI_DIR/diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors"
+    "$MODELS_COMFYUI_DIR/sam3/model.safetensors"
+    "$MODELS_COMFYUI_DIR/lama/big-lama.pt"
+    "$PRIVACY_FACE_MODEL"
+    "$PRIVACY_LP_MODEL"
+  )
 
-need_download=0
-for model_path in "${required_files[@]}"; do
-  if [ ! -f "$model_path" ]; then
-    need_download=1
-    break
-  fi
-done
+  need_download=0
+  for model_path in "${required_files[@]}"; do
+    if [ ! -f "$model_path" ]; then
+      need_download=1
+      break
+    fi
+  done
 
-if [ "$need_download" = "1" ]; then
-  if [ "$AUTO_DOWNLOAD_MODELS" = "1" ]; then
-    echo "Required models missing. Running download-models.sh ..."
-    MODELS_ROOT="$MODELS_ROOT" bash "$REPO/download-models.sh"
-  else
-    echo "ERROR: Required models are missing and AUTO_DOWNLOAD_MODELS=0"
-    exit 1
+  if [ "$need_download" = "1" ]; then
+    if [ "$AUTO_DOWNLOAD_MODELS" = "1" ]; then
+      echo "Required models missing. Running download-models.sh ..."
+      MODELS_ROOT="$MODELS_ROOT" bash "$REPO/download-models.sh"
+    else
+      echo "ERROR: Required models are missing and AUTO_DOWNLOAD_MODELS=0"
+      exit 1
+    fi
   fi
 fi
 
@@ -606,7 +611,7 @@ PY
     echo "=== STAGE_SKIP egoblur reason=STOP_AFTER_STAGE=inpainting elapsed_sec=0 ==="
   else
     if [ "$STOP_AFTER_STAGE" = "egoblur" ]; then
-      ensure_privacy_python_ready
+      : # privacy blur now runs inside container; no host-side setup needed
     fi
 
     if [ "$DOWNSTREAM_MODE" = "isolated" ]; then
@@ -668,11 +673,21 @@ PY
     else
       S_EGO=$(date +%s)
       echo "=== STAGE_START egoblur ==="
-      "$PRIVACY_PYTHON_BIN" "$REPO/inpainting-workflow-master/privacy_blur_infer.py" \
-        --input-dir   "$OUT2" \
-        --output-dir  "$OUT3" \
-        --face-model  "$PRIVACY_FACE_MODEL" \
-        --lp-model    "$PRIVACY_LP_MODEL" \
+      EGO_DOCKER_ARGS=(
+        --rm
+        --name "egoblur-${RUN_ID}"
+        --gpus "device=${NVIDIA_VISIBLE_DEVICES:-0}"
+        -v "$REPO/inpainting-workflow-master:/workspace/inpainting"
+        -v "$MODELS_PRIVACY_DIR:/workspace/models/privacy_blur:ro"
+        -v "$COMFYUI_DATA_DIR/output-postprocessed:/workspace/output-postprocessed"
+        -v "$COMFYUI_DATA_DIR/output-egoblur:/workspace/output-egoblur"
+      )
+      docker run "${EGO_DOCKER_ARGS[@]}" "$COMFY_IMAGE" \
+        python /workspace/inpainting/privacy_blur_infer.py \
+        --input-dir   /workspace/output-postprocessed/$BATCH_NAME \
+        --output-dir  /workspace/output-egoblur/$BATCH_NAME \
+        --face-model  /workspace/models/privacy_blur/face_yolov8n.pt \
+        --lp-model    /workspace/models/privacy_blur/yolo-v9-s-608-license-plates-end2end.onnx \
         --face-conf   "$PRIVACY_FACE_CONF" \
         --lp-conf     "$PRIVACY_LP_CONF" \
         --face-iou    "$PRIVACY_FACE_IOU" \

@@ -278,12 +278,13 @@ install_nvidia_container_toolkit_once() {
     SUDO=
   fi
 
+  $SUDO rm -f /etc/apt/sources.list.d/nvidia-container-toolkit.list
   $SUDO sh -c 'apt-get update && apt-get install -y curl gpg ca-certificates' 2>/dev/null || true
   $SUDO mkdir -p /usr/share/keyrings 2>/dev/null || true
   curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | $SUDO gpg --dearmor --batch --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg 2>/dev/null || true
 
   if [ -f /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg ]; then
-    echo "deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/deb/amd64" | $SUDO tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null
+    echo "deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://nvidia.github.io/libnvidia-container/stable/deb/amd64 /" | $SUDO tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null
   else
     wget -qO- https://nvidia.github.io/libnvidia-container/gpgkey | $SUDO apt-key add - 2>/dev/null || true
     echo "deb https://nvidia.github.io/libnvidia-container/stable/deb/amd64 /" | $SUDO tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null
@@ -304,9 +305,66 @@ install_nvidia_container_toolkit_once() {
 echo "Checking NVIDIA Container Toolkit..."
 if ! docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 nvidia-smi >/dev/null 2>&1; then
   install_nvidia_container_toolkit_once
+  if ! docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 nvidia-smi >/dev/null 2>&1; then
+    echo "ERROR: Docker GPU runtime is not working after toolkit installation."
+    echo "Please verify NVIDIA Container Toolkit + Docker runtime setup manually."
+    exit 1
+  fi
 else
   echo "NVIDIA Container Toolkit already working."
 fi
+
+echo "Checking uv..."
+if ! command -v uv >/dev/null 2>&1; then
+  echo "Installing uv..."
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  if ! command -v uv >/dev/null 2>&1; then
+    echo "ERROR: uv installation failed. Please install manually: curl -LsSf https://astral.sh/uv/install.sh | sh"
+    exit 1
+  fi
+  echo "uv installed successfully."
+else
+  echo "uv already available."
+fi
+
+echo "Checking required models..."
+_models_root="${MODELS_ROOT:-$REPO/models}"
+_models_comfyui="${MODELS_COMFYUI_DIR:-$_models_root/comfyui}"
+_models_privacy="${MODELS_PRIVACY_DIR:-$_models_root/privacy_blur}"
+_required_models=(
+  "$_models_comfyui/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"
+  "$_models_comfyui/vae/qwen_image_vae.safetensors"
+  "$_models_comfyui/loras/Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors"
+  "$_models_comfyui/upscale_models/RealESRGAN_x2plus.pth"
+  "$_models_comfyui/diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors"
+  "$_models_comfyui/sam3/model.safetensors"
+  "$_models_comfyui/lama/big-lama.pt"
+  "$_models_privacy/face_yolov8n.pt"
+  "$_models_privacy/yolo-v9-s-608-license-plates-end2end.onnx"
+)
+_need_download=0
+for _m in "${_required_models[@]}"; do
+  if [ ! -f "$_m" ]; then
+    _need_download=1
+    break
+  fi
+done
+if [ "$_need_download" = "1" ]; then
+  if [ "${AUTO_DOWNLOAD_MODELS:-1}" = "1" ]; then
+    echo "Required models missing. Running download-models.sh once before launching shards..."
+    MODELS_ROOT="$_models_root" bash "$REPO/download-models.sh"
+  else
+    echo "ERROR: Required models are missing and AUTO_DOWNLOAD_MODELS=0"
+    exit 1
+  fi
+else
+  echo "All required models present."
+fi
+
+echo "Pulling Docker image..."
+_comfy_image="${COMFY_IMAGE:-amanbagrecha/container-comfyui:latest}"
+docker pull "$_comfy_image"
 
 LAUNCH_PLAN="$WORK_ROOT/launch_plan.tsv"
 : > "$LAUNCH_PLAN"
@@ -371,6 +429,7 @@ export MODELS_EGOBLUR_DIR="${MODELS_EGOBLUR_DIR:-${MODELS_ROOT:-$REPO/models}/eg
 export MODELS_PRIVACY_DIR="${MODELS_PRIVACY_DIR:-${MODELS_ROOT:-$REPO/models}/privacy_blur}"
 export AUTO_DOWNLOAD_MODELS="${AUTO_DOWNLOAD_MODELS:-1}"
 export FORCE_REPROCESS="${FORCE_REPROCESS:-0}"
+export SKIP_PREFLIGHT=1
 export STRICT_HARDLINK="${STRICT_HARDLINK:-1}"
 export PRIVACY_WORKERS="${PRIVACY_WORKERS:-2}"
 export PRIVACY_FACE_MODEL="${PRIVACY_FACE_MODEL:-${MODELS_PRIVACY_DIR:-${MODELS_ROOT:-$REPO/models}/privacy_blur}/face_yolov8n.pt}"

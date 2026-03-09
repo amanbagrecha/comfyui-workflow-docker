@@ -1,7 +1,7 @@
 services:
   comfyui:
     image: ${COMFY_IMAGE:-amanbagrecha/container-comfyui:latest}
-    pull_policy: always
+    pull_policy: missing
     container_name: ${CONTAINER_NAME:-comfyui-container}
     ports:
       - "${COMFY_PORT:-8188}:8188"

@@ -28,19 +28,67 @@ RUN . .venv/bin/activate && uv pip install pip
 # Install comfy-cli
 RUN . .venv/bin/activate && uv pip install comfy-cli
 
-# Install ComfyUI — pinned to the commit recorded in Comfy-Lock.yaml for reproducibility.
-# --fast-deps installs base ComfyUI deps; restore-snapshot then adds custom node deps on top.
+COPY pipeline-requirements.txt ./
+
+# Seed the pinned torch stack before the ComfyUI bootstrap so later installers
+# reuse the same CUDA wheels instead of resolving their own torch variant.
+RUN python3 - <<'PY'
+from pathlib import Path
+
+src = Path('/workspace/pipeline-requirements.txt')
+keep = []
+for raw in src.read_text().splitlines():
+    line = raw.strip()
+    if not line or line.startswith('#'):
+        continue
+    if line.startswith('--extra-index-url') or line.startswith('torch==') or line.startswith('torchvision==') or line.startswith('torchaudio=='):
+        keep.append(line)
+
+Path('/tmp/torch-bootstrap-requirements.txt').write_text('\n'.join(keep) + '\n')
+PY
+RUN . /workspace/.venv/bin/activate && \
+    uv pip install -r /tmp/torch-bootstrap-requirements.txt
+
+# Clone ComfyUI at a pinned commit; core Python deps are installed separately so
+# torch stays owned by pipeline-requirements.txt.
 ARG COMFYUI_COMMIT=532e2850794c7b497174a0a42ac0cb1fe5b62499
+ARG COMFYUI_MANAGER_COMMIT=2478d20e76aeb2f42a6f372029e417201ef927b3
 RUN . .venv/bin/activate && \
-    comfy --skip-prompt --workspace /workspace/ComfyUI install --nvidia --fast-deps && \
+    git clone https://github.com/comfyanonymous/ComfyUI /workspace/ComfyUI && \
     git -C /workspace/ComfyUI fetch --depth 1 origin ${COMFYUI_COMMIT} && \
     git -C /workspace/ComfyUI checkout ${COMFYUI_COMMIT}
+RUN git clone https://github.com/ltdrdata/ComfyUI-Manager /workspace/ComfyUI/custom_nodes/ComfyUI-Manager && \
+    git -C /workspace/ComfyUI/custom_nodes/ComfyUI-Manager fetch --depth 1 origin ${COMFYUI_MANAGER_COMMIT} && \
+    git -C /workspace/ComfyUI/custom_nodes/ComfyUI-Manager checkout ${COMFYUI_MANAGER_COMMIT}
+RUN . /workspace/.venv/bin/activate && \
+    uv pip install -r /workspace/ComfyUI/custom_nodes/ComfyUI-Manager/requirements.txt
+
+# Install ComfyUI core deps without re-installing torch/torchaudio/torchvision.
+RUN python3 - <<'PY'
+from pathlib import Path
+
+src = Path('/workspace/ComfyUI/requirements.txt')
+skip = {'torch', 'torchaudio', 'torchvision'}
+keep = []
+for raw in src.read_text().splitlines():
+    line = raw.strip()
+    if not line or line.startswith('#'):
+        continue
+    name = line.split('==', 1)[0].split('>=', 1)[0].split('~=', 1)[0].strip().lower()
+    if name in skip:
+        continue
+    keep.append(line)
+
+Path('/tmp/comfy-core-requirements.txt').write_text('\n'.join(keep) + '\n')
+PY
+RUN . /workspace/.venv/bin/activate && \
+    uv pip install -r /tmp/comfy-core-requirements.txt
 
 # Restore ComfyUI custom nodes from lock file for reproducible builds
 WORKDIR /workspace/ComfyUI
 COPY Comfy-Lock.yaml ./
 RUN . /workspace/.venv/bin/activate && \
-    comfy --workspace /workspace/ComfyUI node restore-snapshot \
+    comfy --skip-prompt --workspace /workspace/ComfyUI node restore-snapshot \
         --pip-non-url --pip-non-local-url \
         Comfy-Lock.yaml
 
@@ -55,19 +103,33 @@ RUN if [ -d /workspace/ComfyUI/custom_nodes/p2e ]; then \
 RUN git clone https://github.com/amanbagrecha/p2e.git /workspace/p2e-lib && \
     git -C /workspace/p2e-lib checkout ${P2E_COMMIT}
 
-# Install pipeline deps LAST — pipeline-requirements.txt pins torch+cu128 so it installs
-# after ComfyUI/snapshot and becomes the definitive version. Covers:
+# Install the full pipeline deps after ComfyUI/snapshot to add pipeline-only
+# packages while keeping the pinned torch stack aligned across all installers.
+# Covers:
 #   sm_89  — L40S, RTX 6000 Ada (Ada Lovelace)
 #   sm_120 — RTX 5090 (Blackwell)
 WORKDIR /workspace
-COPY pipeline-requirements.txt ./
 RUN . /workspace/.venv/bin/activate && \
     uv pip install -r pipeline-requirements.txt
 
-# Remove pip-bundled cuDNN and NCCL — both are already provided by the
-# cudnn-runtime base image. Saves ~1.4GB. torch finds them via LD_LIBRARY_PATH.
+# Install packages that otherwise pull conflicting OpenCV wheel names; their
+# shared runtime deps are installed via pipeline-requirements.txt above.
 RUN . /workspace/.venv/bin/activate && \
-    uv pip uninstall -y nvidia-cudnn-cu12 nvidia-nccl-cu12 || true
+    uv pip install --no-deps \
+        simple-lama-inpainting==0.1.0 \
+        ultralytics==8.4.21 \
+        open-image-models==0.5.1
+
+# Keep a single OpenCV wheel in the final environment to avoid cv2 file overlap
+# between contrib/gui/headless builds pulled by different dependencies.
+RUN . /workspace/.venv/bin/activate && \
+    uv pip uninstall opencv-python opencv-python-headless || true && \
+    uv pip install --no-deps opencv-contrib-python==4.12.0.88
+
+# Remove pip-bundled cuDNN only. Keep the pip NCCL wheel because the system
+# NCCL in the base image is too old for the current torch build.
+RUN . /workspace/.venv/bin/activate && \
+    uv pip uninstall nvidia-cudnn-cu12 || true
 
 # Inpainting scripts are volume-mounted at runtime from the host
 # (./inpainting-workflow-master:/workspace/inpainting in docker-compose.yml).

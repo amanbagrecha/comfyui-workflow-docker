@@ -2,8 +2,8 @@
 # Baked into the Docker image at build time.
 # To update: edit this file and rebuild the image.
 #
-# PyTorch is pinned here with the cu128 index so it installs last (after ComfyUI
-# and snapshot restore) and is never downgraded. Targets:
+# PyTorch is pinned here with the cu128 index so both the early torch bootstrap
+# and the final pipeline install reuse the same CUDA wheels. Targets:
 #   sm_89  — L40S, RTX 6000 Ada (Ada Lovelace)
 #   sm_120 — RTX 5090 (Blackwell)
 --extra-index-url https://download.pytorch.org/whl/cu128
@@ -13,20 +13,22 @@ torchaudio==2.10.0+cu128
 
 # Numerics / image processing
 numba
-opencv-contrib-python
-opencv-python
+# Keep one OpenCV distribution in the image; contrib covers the base package.
+opencv-contrib-python==4.12.0.88
+matplotlib
+polars
 
-# Inpainting
-simple-lama-inpainting
+# Inpainting / CLI helpers
+fire
 
 # Utilities
 click
 requests
 tqdm
 
-# Privacy blur + object detection
-ultralytics
-open-image-models[onnx-gpu]
+# Privacy blur + object detection support deps
+onnxruntime-gpu>=1.19.2
+ultralytics-thop>=2.0.18
 
 # 360 panorama conversion
 pytorch360convert

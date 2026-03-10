@@ -1,6 +1,15 @@
 # Pipeline-specific Python dependencies
 # Baked into the Docker image at build time.
 # To update: edit this file and rebuild the image.
+#
+# PyTorch is pinned here with the cu128 index so it installs last (after ComfyUI
+# and snapshot restore) and is never downgraded. Targets:
+#   sm_89  — L40S, RTX 6000 Ada (Ada Lovelace)
+#   sm_120 — RTX 5090 (Blackwell)
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.10.0+cu128
+torchvision==0.25.0+cu128
+torchaudio==2.10.0+cu128
 
 # Numerics / image processing
 numba

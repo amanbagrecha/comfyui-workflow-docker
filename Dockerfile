@@ -1,5 +1,7 @@
 # ===== Stage 1: Builder =====
-FROM nvidia/cuda:12.6.0-runtime-ubuntu22.04 AS builder
+# CUDA 12.8 base required for Blackwell (sm_120 / RTX 5090) support.
+# Also covers Ada Lovelace (sm_89 / L40S, RTX 6000 Ada) and all older archs.
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -27,10 +29,7 @@ RUN . .venv/bin/activate && uv pip install pip
 RUN . .venv/bin/activate && uv pip install comfy-cli
 
 # Install ComfyUI — pinned to the commit recorded in Comfy-Lock.yaml for reproducibility.
-# Improvement 1: pin ComfyUI commit so upstream changes never silently break the build.
-# Improvement 2: --fast-deps installs base ComfyUI deps; restore-snapshot then adds
-#   custom node deps on top. These are complementary, not redundant:
-#   --fast-deps = fast install of ComfyUI core; snapshot = custom node packages.
+# --fast-deps installs base ComfyUI deps; restore-snapshot then adds custom node deps on top.
 ARG COMFYUI_COMMIT=532e2850794c7b497174a0a42ac0cb1fe5b62499
 RUN . .venv/bin/activate && \
     comfy --skip-prompt --workspace /workspace/ComfyUI install --nvidia --fast-deps && \
@@ -52,26 +51,32 @@ RUN if [ -d /workspace/ComfyUI/custom_nodes/p2e ]; then \
       git -C /workspace/ComfyUI/custom_nodes/p2e checkout ${P2E_COMMIT}; \
     fi
 
-# Improvement 3: pipeline deps in a separate requirements file so this layer
-# only re-runs when pipeline deps change, not when scripts or ComfyUI change.
+# Clone p2e standalone library (required by postprocess.py)
+RUN git clone https://github.com/amanbagrecha/p2e.git /workspace/p2e-lib && \
+    git -C /workspace/p2e-lib checkout ${P2E_COMMIT}
+
+# Install pipeline deps LAST — pipeline-requirements.txt pins torch+cu128 so it installs
+# after ComfyUI/snapshot and becomes the definitive version. Covers:
+#   sm_89  — L40S, RTX 6000 Ada (Ada Lovelace)
+#   sm_120 — RTX 5090 (Blackwell)
 WORKDIR /workspace
 COPY pipeline-requirements.txt ./
 RUN . /workspace/.venv/bin/activate && \
     uv pip install -r pipeline-requirements.txt
 
-# Clone p2e standalone library (required by postprocess.py)
-RUN git clone https://github.com/amanbagrecha/p2e.git /workspace/p2e-lib && \
-    git -C /workspace/p2e-lib checkout ${P2E_COMMIT}
+# Remove pip-bundled cuDNN and NCCL — both are already provided by the
+# cudnn-runtime base image. Saves ~1.4GB. torch finds them via LD_LIBRARY_PATH.
+RUN . /workspace/.venv/bin/activate && \
+    uv pip uninstall -y nvidia-cudnn-cu12 nvidia-nccl-cu12 || true
 
-# Improvement 4: inpainting scripts are volume-mounted at runtime from the host
+# Inpainting scripts are volume-mounted at runtime from the host
 # (./inpainting-workflow-master:/workspace/inpainting in docker-compose.yml).
-# We COPY them here as a fallback so the image works standalone (e.g. docker run
-# without compose), but the host mount always takes precedence when present.
+# Copied here as fallback so the image works standalone without compose.
 COPY inpainting-workflow-master /workspace/inpainting/
 
 # ===== Stage 2: Runtime =====
-# Lean image — build tools (git, build-essential, python3-dev, curl, uv) are NOT present.
-FROM nvidia/cuda:12.6.0-runtime-ubuntu22.04 AS runtime
+# CUDA 12.8 base to match builder — required for Blackwell/Ada GPU support.
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04 AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -100,6 +105,8 @@ COPY --from=builder /root/.config           /root/.config
 
 ENV PATH="/workspace/.venv/bin:$PATH"
 ENV PYTHONPATH="/workspace/p2e-lib:/workspace/ComfyUI"
+# Allow torch to find system cuDNN/NCCL (replaces pip-bundled nvidia-cudnn-cu12, nvidia-nccl-cu12)
+ENV LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/local/cuda/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
 RUN mkdir -p /workspace/input /workspace/output /workspace/models
 

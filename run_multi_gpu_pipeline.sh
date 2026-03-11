@@ -27,6 +27,7 @@ Environment variables:
   SINGLE_GPU_CONFLICT_MODE  Optional. off|warn|stop. Default: warn.
                             Applies only when NUM_GPUS=1. Detects other running
                             comfyui containers and optionally stops them.
+  S3_MODELS_ROOT            Optional. Default: s3://panaromic-images/pano_models
 
 Forwarded to each shard run_full_pipeline.sh invocation (per GPU):
   MODELS_ROOT, MODELS_COMFYUI_DIR, MODELS_EGOBLUR_DIR, MODELS_PRIVACY_DIR,
@@ -37,7 +38,7 @@ Forwarded to each shard run_full_pipeline.sh invocation (per GPU):
   PRIVACY_WORKERS, PRIVACY_FACE_MODEL, PRIVACY_LP_MODEL,
   PRIVACY_FACE_CONF, PRIVACY_LP_CONF, PRIVACY_FACE_IOU, PRIVACY_FACE_IMGSZ,
   PRIVACY_DET_FACE_W, PRIVACY_P360_DEVICE, PRIVACY_BLUR_SCOPE,
-  PRIVACY_BLUR_BACKEND, PRIVACY_OUTPUT_MODE, PRIVACY_PYTHON_BIN,
+  PRIVACY_BLUR_BACKEND, PRIVACY_OUTPUT_MODE,
   COMFY_IMAGE_NODE_ID, COMFY_MASK_NODE_ID, COMFY_SAM3_MASK_NODE_ID,
   SKY_REFERENCE_SOURCE, SKY_REFERENCE_FILENAME,
   LAPLACIAN_DILATION, LAPLACIAN_BLUR, LAPLACIAN_LEVELS,
@@ -328,6 +329,30 @@ else
   echo "uv already available."
 fi
 
+ensure_aws_cli() {
+  if command -v aws >/dev/null 2>&1; then
+    echo "aws already available."
+    return 0
+  fi
+
+  echo "Installing awscli with uv..."
+  if ! uv tool install awscli; then
+    echo "WARNING: awscli installation failed. Model downloads will fall back to HTTP sources."
+    return 1
+  fi
+
+  export PATH="$HOME/.local/bin:$PATH"
+  if ! command -v aws >/dev/null 2>&1; then
+    echo "WARNING: awscli installed but 'aws' is still not in PATH. Model downloads will fall back to HTTP sources."
+    return 1
+  fi
+
+  echo "awscli installed successfully."
+}
+
+echo "Checking awscli..."
+ensure_aws_cli || true
+
 echo "Checking required models..."
 _models_root="${MODELS_ROOT:-$REPO/models}"
 _models_comfyui="${MODELS_COMFYUI_DIR:-$_models_root/comfyui}"
@@ -447,7 +472,6 @@ export PRIVACY_P360_DEVICE="${PRIVACY_P360_DEVICE:-auto}"
 export PRIVACY_BLUR_SCOPE="${PRIVACY_BLUR_SCOPE:-roi}"
 export PRIVACY_BLUR_BACKEND="${PRIVACY_BLUR_BACKEND:-gpu}"
 export PRIVACY_OUTPUT_MODE="${PRIVACY_OUTPUT_MODE:-blur_only}"
-export PRIVACY_PYTHON_BIN="${PRIVACY_PYTHON_BIN:-/data/.venv/bin/python}"
 export COMFY_IMAGE_NODE_ID="${COMFY_IMAGE_NODE_ID:-91}"
 export COMFY_MASK_NODE_ID="${COMFY_MASK_NODE_ID:-34}"
 export COMFY_SAM3_MASK_NODE_ID="${COMFY_SAM3_MASK_NODE_ID:-60}"

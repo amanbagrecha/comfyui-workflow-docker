@@ -634,7 +634,7 @@ PY
         -v "$COMFYUI_DATA_DIR/output-postprocessed:/workspace/output-postprocessed"
         -v "$COMFYUI_DATA_DIR/output-egoblur:/workspace/output-egoblur"
       )
-      docker run "${EGO_DOCKER_ARGS[@]}" "$COMFY_IMAGE" \
+      EGO_CMD=(
         python /workspace/inpainting/privacy_blur_infer.py \
         --input-dir   /workspace/output-postprocessed/$BATCH_NAME \
         --output-dir  /workspace/output-egoblur/$BATCH_NAME \
@@ -649,8 +649,12 @@ PY
         --blur-scope  "$PRIVACY_BLUR_SCOPE" \
         --blur-backend "$PRIVACY_BLUR_BACKEND" \
         --output-mode "$PRIVACY_OUTPUT_MODE" \
-        --workers     "$PRIVACY_WORKERS" \
-        --overwrite
+        --workers     "$PRIVACY_WORKERS"
+      )
+      if [ "$FORCE_REPROCESS" = "1" ]; then
+        EGO_CMD+=( --overwrite )
+      fi
+      docker run "${EGO_DOCKER_ARGS[@]}" "$COMFY_IMAGE" "${EGO_CMD[@]}"
 
       E_EGO=$(date +%s)
       EGOBLUR_SEC=$((E_EGO - S_EGO))

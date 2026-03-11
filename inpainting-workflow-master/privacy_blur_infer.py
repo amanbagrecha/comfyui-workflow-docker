@@ -122,6 +122,9 @@ def apply_roi_blur_bgr(
 
         roi = image_bgr_u8[y1:y2, x1:x2]
         if blur_backend == "gpu":
+            pad = max(1, int(round(3.0 * max(0.1, float(sigma)))))
+            if roi.shape[0] <= pad or roi.shape[1] <= pad:
+                continue
             roi_blur = gaussian_blur_gpu_bgr(
                 image_bgr_u8=roi,
                 sigma=sigma,
@@ -353,11 +356,19 @@ def _process_chunk(packed: dict) -> tuple[list, list]:
                 mask = np.clip(mask, 0.0, 1.0)
 
             if annotated_pano is not None:
-                for idx, (_face_name, _x1, _y1, _x2, _y2, conf, typ) in enumerate(all_dets):
+                for idx, (_face_name, _x1, _y1, _x2, _y2, conf, typ) in enumerate(
+                    all_dets
+                ):
                     single_mask = projected[idx].detach().cpu().numpy()
                     bw = (single_mask >= packed["mask_threshold"]).astype(np.uint8)
-                    contours, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                    contours = [c for c in contours if cv2.contourArea(c) >= packed["min_contour_area"]]
+                    contours, _ = cv2.findContours(
+                        bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                    )
+                    contours = [
+                        c
+                        for c in contours
+                        if cv2.contourArea(c) >= packed["min_contour_area"]
+                    ]
                     if not contours:
                         continue
                     color = (24, 180, 24) if typ == "F" else (0, 0, 255)
@@ -389,13 +400,19 @@ def _process_chunk(packed: dict) -> tuple[list, list]:
             else:
                 if blur_backend == "gpu":
                     blurred = gaussian_blur_gpu_bgr(
-                        image_bgr_u8=pano, sigma=packed["blur_sigma"],
-                        device=p360_device, dtype=blur_dtype,
+                        image_bgr_u8=pano,
+                        sigma=packed["blur_sigma"],
+                        device=p360_device,
+                        dtype=blur_dtype,
                     )
                 else:
-                    blurred = cv2.GaussianBlur(pano, (0, 0), sigmaX=packed["blur_sigma"])
+                    blurred = cv2.GaussianBlur(
+                        pano, (0, 0), sigmaX=packed["blur_sigma"]
+                    )
                 mask3 = mask[..., None]
-                out_blur = (pano.astype(np.float32) * (1.0 - mask3)) + (blurred.astype(np.float32) * mask3)
+                out_blur = (pano.astype(np.float32) * (1.0 - mask3)) + (
+                    blurred.astype(np.float32) * mask3
+                )
                 out_blur = np.clip(out_blur, 0, 255).astype(np.uint8)
             t_blur = time.perf_counter() - t
         else:
@@ -416,16 +433,30 @@ def _process_chunk(packed: dict) -> tuple[list, list]:
             f"[w{packed['worker_id']}] ok {image_path.name} face={image_face_count} lp={image_lp_count} sec={elapsed:.2f}",
             flush=True,
         )
-        rows_summary.append([
-            image_path.name, str(image_face_count), str(image_lp_count),
-            str(image_face_count + image_lp_count), f"{elapsed:.6f}",
-            str(blur_path), str(annot_path) if annotated_pano is not None else "",
-        ])
-        rows_profile.append([
-            image_path.name, f"{t_read:.6f}", f"{t_e2c:.6f}",
-            f"{t_detect_face:.6f}", f"{t_detect_lp:.6f}",
-            f"{t_project:.6f}", f"{t_blur:.6f}", f"{t_write:.6f}", f"{elapsed:.6f}",
-        ])
+        rows_summary.append(
+            [
+                image_path.name,
+                str(image_face_count),
+                str(image_lp_count),
+                str(image_face_count + image_lp_count),
+                f"{elapsed:.6f}",
+                str(blur_path),
+                str(annot_path) if annotated_pano is not None else "",
+            ]
+        )
+        rows_profile.append(
+            [
+                image_path.name,
+                f"{t_read:.6f}",
+                f"{t_e2c:.6f}",
+                f"{t_detect_face:.6f}",
+                f"{t_detect_lp:.6f}",
+                f"{t_project:.6f}",
+                f"{t_blur:.6f}",
+                f"{t_write:.6f}",
+                f"{elapsed:.6f}",
+            ]
+        )
 
     return rows_summary, rows_profile
 
@@ -489,8 +520,12 @@ def main() -> None:
         help="both = blur + annotated output; blur_only = production output",
     )
     parser.add_argument("--overwrite", action="store_true")
-    parser.add_argument("--workers", default=1, type=int,
-                        help="Number of parallel worker processes (each loads its own models)")
+    parser.add_argument(
+        "--workers",
+        default=1,
+        type=int,
+        help="Number of parallel worker processes (each loads its own models)",
+    )
     args = parser.parse_args()
 
     if not args.input_dir.exists():
@@ -511,14 +546,19 @@ def main() -> None:
         output_dir=str(args.output_dir),
         face_model=str(args.face_model),
         lp_model=str(args.lp_model),
-        face_conf=args.face_conf, lp_conf=args.lp_conf,
-        face_iou=args.face_iou, face_imgsz=args.face_imgsz,
+        face_conf=args.face_conf,
+        lp_conf=args.lp_conf,
+        face_iou=args.face_iou,
+        face_imgsz=args.face_imgsz,
         det_face_w=args.det_face_w,
         p360_device=args.p360_device,
-        blur_backend=args.blur_backend, blur_scope=args.blur_scope,
+        blur_backend=args.blur_backend,
+        blur_scope=args.blur_scope,
         blur_sigma=args.blur_sigma,
-        mask_threshold=args.mask_threshold, mask_feather=args.mask_feather,
-        roi_pad=args.roi_pad, roi_min_area=args.roi_min_area,
+        mask_threshold=args.mask_threshold,
+        mask_feather=args.mask_feather,
+        roi_pad=args.roi_pad,
+        roi_min_area=args.roi_min_area,
         roi_mask_threshold=args.roi_mask_threshold,
         min_contour_area=args.min_contour_area,
         jpg_quality=args.jpg_quality,
@@ -549,7 +589,10 @@ def main() -> None:
     else:
         ctx = multiprocessing.get_context("spawn")
         with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
-            futures = {pool.submit(_process_chunk, item): item["worker_id"] for item in work_items}
+            futures = {
+                pool.submit(_process_chunk, item): item["worker_id"]
+                for item in work_items
+            }
             for fut in as_completed(futures):
                 wid = futures[fut]
                 try:
@@ -564,20 +607,52 @@ def main() -> None:
 
     with summary_csv.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["image", "face_boxes", "lp_boxes", "total_boxes", "elapsed_sec", "blur_output", "annot_output"])
+        w.writerow(
+            [
+                "image",
+                "face_boxes",
+                "lp_boxes",
+                "total_boxes",
+                "elapsed_sec",
+                "blur_output",
+                "annot_output",
+            ]
+        )
         w.writerows(rows_summary)
 
     with profile_csv.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["image", "read_sec", "e2c_sec", "detect_face_sec", "detect_lp_sec", "project_sec", "blur_sec", "write_sec", "total_sec"])
+        w.writerow(
+            [
+                "image",
+                "read_sec",
+                "e2c_sec",
+                "detect_face_sec",
+                "detect_lp_sec",
+                "project_sec",
+                "blur_sec",
+                "write_sec",
+                "total_sec",
+            ]
+        )
         w.writerows(rows_profile)
 
     processed = len(rows_summary)
     total_face = sum(int(float(r[1])) for r in rows_summary)
     total_lp = sum(int(float(r[2])) for r in rows_summary)
     total_elapsed = sum(float(r[4]) for r in rows_summary)
-    profile_cols = ["read_sec", "e2c_sec", "detect_face_sec", "detect_lp_sec", "project_sec", "blur_sec", "write_sec"]
-    col_sums = [sum(float(r[i + 1]) for r in rows_profile) for i in range(len(profile_cols))]
+    profile_cols = [
+        "read_sec",
+        "e2c_sec",
+        "detect_face_sec",
+        "detect_lp_sec",
+        "project_sec",
+        "blur_sec",
+        "write_sec",
+    ]
+    col_sums = [
+        sum(float(r[i + 1]) for r in rows_profile) for i in range(len(profile_cols))
+    ]
 
     print(f"processed_images={processed}")
     print(f"total_face_boxes={total_face}")

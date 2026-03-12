@@ -30,11 +30,11 @@ Environment variables:
   S3_MODELS_ROOT            Optional. Default: s3://panaromic-images/pano_models
 
 Forwarded to each shard run_full_pipeline.sh invocation (per GPU):
-  MODELS_ROOT, MODELS_COMFYUI_DIR, MODELS_EGOBLUR_DIR, MODELS_PRIVACY_DIR,
+  MODELS_ROOT, MODELS_COMFYUI_DIR, MODELS_PRIVACY_DIR,
   AUTO_DOWNLOAD_MODELS, FORCE_REPROCESS, STRICT_HARDLINK,
   SAM3_WORKERS, SAM3_RESIZE_WIDTH, SAM3_RESIZE_HEIGHT, SAM3_GLARE_THRESHOLD,
   SAM3_TILE_ROWS, SAM3_TILE_COLS, SAM3_SCRIPT,
-  POSTPROCESS_WORKERS, EGOBLUR_WORKERS,
+  POSTPROCESS_WORKERS,
   PRIVACY_WORKERS, PRIVACY_FACE_MODEL, PRIVACY_LP_MODEL,
   PRIVACY_FACE_CONF, PRIVACY_LP_CONF, PRIVACY_FACE_IOU, PRIVACY_FACE_IMGSZ,
   PRIVACY_DET_FACE_W, PRIVACY_P360_DEVICE, PRIVACY_BLUR_SCOPE,
@@ -48,7 +48,7 @@ Forwarded to each shard run_full_pipeline.sh invocation (per GPU):
   RESET_CONTAINER_BEFORE_RUN (default: 1 in this launcher).
 
 Notes:
-  - Input sharding is automatic (round-robin) using hardlinks when possible.
+  - Input sharding is automatic (sequential contiguous splits) using hardlinks when possible.
   - One shard run is launched per GPU in tmux.
   - Each shard only stops its own container via COMFY_STOP_CONTAINERS=<container>.
 EOF
@@ -89,6 +89,148 @@ STRICT_HARDLINK="${STRICT_HARDLINK:-1}"
 
 DOWNSTREAM_MODE="${DOWNSTREAM_MODE:-isolated}"
 STOP_AFTER_STAGE="${STOP_AFTER_STAGE:-egoblur}"
+PIPELINE_HELPERS="$REPO/inpainting-workflow-master/pipeline_helpers.py"
+
+LOG_DIR="$REPO/logs"
+LOG_FILE="$LOG_DIR/multigpu_${RUN_NAME}.log"
+EVENTS_FILE="$LOG_DIR/multigpu_${RUN_NAME}.events.jsonl"
+mkdir -p "$LOG_DIR" "$WORK_ROOT/shards" "$WORK_ROOT/jobs"
+
+exec > >(while IFS= read -r line; do printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$line"; done | tee -a "$LOG_FILE") 2>&1
+
+START_EPOCH=$(date +%s)
+END_EPOCH=0
+TOTAL_IN=0
+TOTAL_OUT=0
+FAIL=0
+NUM_GPUS=0
+RUN_STATUS="running"
+RUN_FINALIZED=0
+CURRENT_STEP=""
+CURRENT_STEP_STARTED_AT=0
+FAILED_STEP=""
+FAILED_COMMAND=""
+FAILED_ERROR=""
+FAILED_EXIT_CODE=0
+MERGED_ROOT=""
+
+EVENT_BASE_ARGS=(
+  append-event
+  --file "$EVENTS_FILE"
+  --run-type multi_gpu
+  --run-id "$RUN_NAME"
+  --script run_multi_gpu_pipeline.sh
+)
+
+log_event() {
+  python3 "$PIPELINE_HELPERS" "${EVENT_BASE_ARGS[@]}" "$@" >/dev/null 2>&1 || true
+}
+
+set_step() {
+  CURRENT_STEP="$1"
+  CURRENT_STEP_STARTED_AT=$(date +%s)
+}
+
+clear_step() {
+  CURRENT_STEP=""
+  CURRENT_STEP_STARTED_AT=0
+}
+
+on_error() {
+  local exit_code="$1"
+  local line_no="$2"
+  local command="$3"
+  local step="${CURRENT_STEP:-runtime}"
+  local elapsed=0
+  RUN_STATUS="failure"
+  if [ "$CURRENT_STEP_STARTED_AT" -gt 0 ]; then
+    elapsed=$(( $(date +%s) - CURRENT_STEP_STARTED_AT ))
+  fi
+  if [ -z "$FAILED_STEP" ]; then
+    FAILED_STEP="$step"
+  fi
+  if [ -z "$FAILED_COMMAND" ]; then
+    FAILED_COMMAND="$command"
+  fi
+  if [ -z "$FAILED_ERROR" ]; then
+    FAILED_ERROR="command failed at line $line_no"
+  fi
+  FAILED_EXIT_CODE="$exit_code"
+  log_event \
+    --event step_fail \
+    --status failure \
+    --stage "$step" \
+    --elapsed-sec "$elapsed" \
+    --exit-code "$exit_code" \
+    --command "$command" \
+    --error "command failed at line $line_no"
+  clear_step
+}
+
+on_exit() {
+  local exit_code="$1"
+  local -a event_args=(
+    --event run_end
+    --status success
+    --metric total_in="$TOTAL_IN"
+    --metric total_out="$TOTAL_OUT"
+    --metric failed_shards="$FAIL"
+    --metric num_gpus="$NUM_GPUS"
+    --path log_file="$LOG_FILE"
+    --path events_file="$EVENTS_FILE"
+    --path work_root="$WORK_ROOT"
+  )
+
+  if [ "$RUN_FINALIZED" -eq 1 ]; then
+    return
+  fi
+  RUN_FINALIZED=1
+
+  END_EPOCH=$(date +%s)
+  if [ -n "${START_EPOCH:-}" ]; then
+    event_args+=( --elapsed-sec "$((END_EPOCH - START_EPOCH))" )
+  fi
+  if [ -n "$MERGED_ROOT" ]; then
+    event_args+=( --path merged_output="$MERGED_ROOT" )
+  fi
+
+  if [ "$exit_code" -ne 0 ] || [ "$RUN_STATUS" = "failure" ]; then
+    event_args=(
+      --event run_end
+      --status failure
+      --metric total_in="$TOTAL_IN"
+      --metric total_out="$TOTAL_OUT"
+      --metric failed_shards="$FAIL"
+      --metric num_gpus="$NUM_GPUS"
+      --path log_file="$LOG_FILE"
+      --path events_file="$EVENTS_FILE"
+      --path work_root="$WORK_ROOT"
+    )
+    if [ -n "${START_EPOCH:-}" ]; then
+      event_args+=( --elapsed-sec "$((END_EPOCH - START_EPOCH))" )
+    fi
+    if [ -n "$MERGED_ROOT" ]; then
+      event_args+=( --path merged_output="$MERGED_ROOT" )
+    fi
+    if [ -n "$FAILED_STEP" ]; then
+      event_args+=( --stage "$FAILED_STEP" )
+    fi
+    if [ "$FAILED_EXIT_CODE" -ne 0 ]; then
+      event_args+=( --exit-code "$FAILED_EXIT_CODE" )
+    fi
+    if [ -n "$FAILED_COMMAND" ]; then
+      event_args+=( --command "$FAILED_COMMAND" )
+    fi
+    if [ -n "$FAILED_ERROR" ]; then
+      event_args+=( --error "$FAILED_ERROR" )
+    fi
+  fi
+
+  log_event "${event_args[@]}"
+}
+
+trap 'on_error $? $LINENO "$BASH_COMMAND"' ERR
+trap 'on_exit $?' EXIT
 
 if [[ "$MAX_GPUS" =~ [^0-9] ]]; then
   echo "ERROR: MAX_GPUS must be a non-negative integer"
@@ -183,87 +325,51 @@ if [[ "$NUM_GPUS" -eq 1 && "$SINGLE_GPU_CONFLICT_MODE" != "off" ]]; then
   fi
 fi
 
-mkdir -p "$WORK_ROOT/shards" "$WORK_ROOT/jobs" "$REPO/logs"
-
 MANIFEST_JSON="$WORK_ROOT/shard_manifest.json"
 COUNT_JSON="$WORK_ROOT/shard_counts.json"
 
-python3 - <<'PY' "$SRC" "$WORK_ROOT/shards" "$NUM_GPUS" "$MANIFEST_JSON" "$COUNT_JSON" "$STRICT_HARDLINK"
-import json
-import shutil
-import sys
-from pathlib import Path
+GPU_IDS_CSV=$(IFS=,; printf '%s' "${GPU_LIST[*]}")
+log_event \
+  --event run_start \
+  --status running \
+  --param gpu_ids="$GPU_IDS_CSV" \
+  --param downstream_mode="$DOWNSTREAM_MODE" \
+  --param stop_after_stage="$STOP_AFTER_STAGE" \
+  --param strict_hardlink="$STRICT_HARDLINK" \
+  --param dry_run="$DRY_RUN" \
+  --param single_gpu_conflict_mode="$SINGLE_GPU_CONFLICT_MODE" \
+  --metric num_gpus="$NUM_GPUS" \
+  --path log_file="$LOG_FILE" \
+  --path events_file="$EVENTS_FILE" \
+  --path work_root="$WORK_ROOT" \
+  --path source_dir="$SRC" \
+  --path manifest_json="$MANIFEST_JSON" \
+  --path count_json="$COUNT_JSON"
 
-src = Path(sys.argv[1]).resolve()
-shards_root = Path(sys.argv[2]).resolve()
-num_gpus = int(sys.argv[3])
-manifest_path = Path(sys.argv[4]).resolve()
-count_path = Path(sys.argv[5]).resolve()
-strict_hardlink = sys.argv[6] == "1"
-
-exts = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp"}
-files = [p for p in sorted(src.iterdir()) if p.is_file() and p.suffix.lower() in exts]
-if not files:
-    raise SystemExit(f"No image files found in {src}")
-
-for i in range(num_gpus):
-    d = shards_root / f"gpu{i}"
-    if d.exists():
-        shutil.rmtree(d)
-    d.mkdir(parents=True, exist_ok=True)
-
-manifest = []
-counts = {str(i): 0 for i in range(num_gpus)}
-
-for idx, src_file in enumerate(files):
-    shard_i = idx % num_gpus
-    shard_dir = shards_root / f"gpu{shard_i}"
-    stem = src_file.stem
-    suffix = src_file.suffix.lower()
-    dst = shard_dir / f"{stem}{suffix}"
-    k = 1
-    while dst.exists():
-        dst = shard_dir / f"{stem}__dup{k:03d}{suffix}"
-        k += 1
-
-    try:
-        dst.hardlink_to(src_file)
-    except OSError as exc:
-        if strict_hardlink:
-            raise SystemExit(
-                f"Hardlink failed (STRICT_HARDLINK=1): {src_file} -> {dst}: {exc}"
-            )
-        shutil.copy2(src_file, dst)
-
-    manifest.append(
-        {
-            "src": str(src_file),
-            "dst": str(dst),
-            "shard_index": shard_i,
-            "dst_name": dst.name,
-        }
-    )
-    counts[str(shard_i)] += 1
-
-manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-count_path.write_text(json.dumps(counts, indent=2), encoding="utf-8")
-
-print(f"input_images={len(files)}")
-for i in range(num_gpus):
-    print(f"shard_gpu_index_{i}_count={counts[str(i)]}")
-print(f"manifest={manifest_path}")
-PY
+set_step split_shards
+python3 "$PIPELINE_HELPERS" split-shards \
+  --src "$SRC" \
+  --shards-root "$WORK_ROOT/shards" \
+  --num-gpus "$NUM_GPUS" \
+  --manifest-json "$MANIFEST_JSON" \
+  --count-json "$COUNT_JSON" \
+  --strict-hardlink "$STRICT_HARDLINK"
+clear_step
 
 echo "RUN_NAME=$RUN_NAME"
 echo "SRC=$SRC"
 echo "NUM_GPUS=$NUM_GPUS"
 echo "GPU_IDS=${GPU_LIST[*]}"
 echo "WORK_ROOT=$WORK_ROOT"
+echo "LOG_FILE=$LOG_FILE"
+echo "EVENTS_FILE=$EVENTS_FILE"
 echo "DOWNSTREAM_MODE=$DOWNSTREAM_MODE"
 echo "STOP_AFTER_STAGE=$STOP_AFTER_STAGE"
 echo "STRICT_HARDLINK=$STRICT_HARDLINK"
 echo "DRY_RUN=$DRY_RUN"
 echo "SINGLE_GPU_CONFLICT_MODE=$SINGLE_GPU_CONFLICT_MODE"
+
+set_step preflight
 
 install_nvidia_container_toolkit_once() {
   if command -v nvidia-container-cli >/dev/null 2>&1; then
@@ -395,20 +501,16 @@ else
   docker pull "$_comfy_image"
 fi
 
+clear_step
+
 LAUNCH_PLAN="$WORK_ROOT/launch_plan.tsv"
 : > "$LAUNCH_PLAN"
 
+set_step launch_shards
 for idx in "${!GPU_LIST[@]}"; do
   gpu_id="${GPU_LIST[$idx]}"
   shard_dir="$WORK_ROOT/shards/gpu${idx}"
-  shard_count=$(python3 - <<'PY' "$shard_dir"
-from pathlib import Path
-import sys
-p = Path(sys.argv[1])
-exts = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp"}
-print(sum(1 for f in p.iterdir() if f.is_file() and f.suffix.lower() in exts))
-PY
-)
+  shard_count=$(python3 "$PIPELINE_HELPERS" count-images --path "$shard_dir" --include-bmp)
 
   if [[ "$shard_count" -eq 0 ]]; then
     echo "Skipping GPU $gpu_id (empty shard)"
@@ -418,10 +520,12 @@ PY
   container_name="${CONTAINER_PREFIX}${gpu_id}"
   comfy_port=$((BASE_COMFY_PORT + idx))
   batch_name="${RUN_NAME}-g${gpu_id}"
+  child_run_id="${RUN_NAME}_g${gpu_id}"
   comfy_data_dir="$COMFYUI_DATA_ROOT/$container_name"
   session_name="${TMUX_SESSION_PREFIX}-${RUN_NAME}-g${gpu_id}"
   rc_file="$WORK_ROOT/rc_gpu${gpu_id}.txt"
-  summary_file="$WORK_ROOT/summary_gpu${gpu_id}.txt"
+  child_log_file="$LOG_DIR/fullrun_${child_run_id}.log"
+  child_events_file="$LOG_DIR/fullrun_${child_run_id}.events.jsonl"
   job_script="$WORK_ROOT/jobs/gpu${gpu_id}.sh"
 
   cat > "$job_script" <<EOF
@@ -448,13 +552,11 @@ export SAM3_TILE_ROWS="${SAM3_TILE_ROWS:-2}"
 export SAM3_TILE_COLS="${SAM3_TILE_COLS:-1}"
 export SAM3_SCRIPT="${SAM3_SCRIPT:-sam3_tiled_mask.py}"
 export POSTPROCESS_WORKERS="${POSTPROCESS_WORKERS:-3}"
-export EGOBLUR_WORKERS="${EGOBLUR_WORKERS:-4}"
 export LAPLACIAN_DILATION="${LAPLACIAN_DILATION:-1}"
 export LAPLACIAN_BLUR="${LAPLACIAN_BLUR:-10}"
 export LAPLACIAN_LEVELS="${LAPLACIAN_LEVELS:-7}"
 export MODELS_ROOT="${MODELS_ROOT:-$REPO/models}"
 export MODELS_COMFYUI_DIR="${MODELS_COMFYUI_DIR:-${MODELS_ROOT:-$REPO/models}/comfyui}"
-export MODELS_EGOBLUR_DIR="${MODELS_EGOBLUR_DIR:-${MODELS_ROOT:-$REPO/models}/egoblur_gen2}"
 export MODELS_PRIVACY_DIR="${MODELS_PRIVACY_DIR:-${MODELS_ROOT:-$REPO/models}/privacy_blur}"
 export AUTO_DOWNLOAD_MODELS="${AUTO_DOWNLOAD_MODELS:-1}"
 export FORCE_REPROCESS="${FORCE_REPROCESS:-0}"
@@ -483,29 +585,51 @@ export NVIDIA_CUDA_TEST_IMAGE="${NVIDIA_CUDA_TEST_IMAGE:-nvidia/cuda:12.6.0-base
 export COMFY_IMAGE="${COMFY_IMAGE:-amanbagrecha/container-comfyui:latest}"
 export TORCH_CACHE_DIR="${TORCH_CACHE_DIR:-$HOME/.cache/torch}"
 export RESET_CONTAINER_BEFORE_RUN="${RESET_CONTAINER_BEFORE_RUN:-1}"
+export RUN_ID="$child_run_id"
+export PARENT_RUN_ID="$RUN_NAME"
 
 "$RUN_FULL"
 rc=\$?
 printf '%s\n' "\$rc" > "$rc_file"
-
-latest_summary=\$(ls -t "$REPO"/logs/fullrun_*"${container_name}"*.summary.txt 2>/dev/null | head -n 1 || true)
-printf '%s\n' "\$latest_summary" > "$summary_file"
 exit "\$rc"
 EOF
 
   chmod +x "$job_script"
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$gpu_id" "$idx" "$container_name" "$batch_name" "$comfy_data_dir" "$session_name" "$rc_file" "$summary_file" >> "$LAUNCH_PLAN"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$gpu_id" "$idx" "$container_name" "$batch_name" "$comfy_data_dir" "$session_name" "$rc_file" "$child_run_id" "$child_log_file" "$child_events_file" >> "$LAUNCH_PLAN"
 
   echo "Planned GPU=$gpu_id shard_idx=$idx count=$shard_count container=$container_name batch=$batch_name port=$comfy_port session=$session_name"
+  log_event \
+    --event shard_planned \
+    --status success \
+    --gpu-id "$gpu_id" \
+    --shard-index "$idx" \
+    --child-run-id "$child_run_id" \
+    --container-name "$container_name" \
+    --batch-name "$batch_name" \
+    --metric input_count="$shard_count" \
+    --path shard_dir="$shard_dir" \
+    --path child_log_file="$child_log_file" \
+    --path child_events_file="$child_events_file"
 
   if [[ "$DRY_RUN" == "1" ]]; then
     continue
   fi
 
   tmux new-session -d -s "$session_name" "$job_script"
+  log_event \
+    --event shard_launched \
+    --status running \
+    --gpu-id "$gpu_id" \
+    --shard-index "$idx" \
+    --child-run-id "$child_run_id" \
+    --container-name "$container_name" \
+    --batch-name "$batch_name" \
+    --path child_log_file="$child_log_file" \
+    --path child_events_file="$child_events_file"
 done
+clear_step
 
 if [[ "$DRY_RUN" == "1" ]]; then
   echo "Dry run complete. Launch plan: $LAUNCH_PLAN"
@@ -518,9 +642,10 @@ if [[ ! -s "$LAUNCH_PLAN" ]]; then
 fi
 
 echo "Waiting for shard sessions to complete..."
+set_step wait_shards
 while true; do
   alive=0
-  while IFS=$'\t' read -r _ _ _ _ _ session _ _; do
+  while IFS=$'\t' read -r _ _ _ _ _ session _ _ _ _; do
     if tmux has-session -t "$session" 2>/dev/null; then
       alive=$((alive + 1))
     fi
@@ -536,24 +661,13 @@ done
 
 echo "All shard sessions finished."
 
-FAIL=0
-TOTAL_IN=0
-TOTAL_OUT=0
-
-while IFS=$'\t' read -r gpu_id idx container batch comfy_data_dir _ rc_file summary_file; do
+while IFS=$'\t' read -r gpu_id idx container batch comfy_data_dir _ rc_file child_run_id child_log_file child_events_file; do
   rc="missing"
   if [[ -f "$rc_file" ]]; then
     rc="$(tr -d '[:space:]' < "$rc_file")"
   fi
 
-  in_count=$(python3 - <<'PY' "$WORK_ROOT/shards/gpu${idx}"
-from pathlib import Path
-import sys
-exts = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp"}
-p = Path(sys.argv[1])
-print(sum(1 for f in p.iterdir() if f.is_file() and f.suffix.lower() in exts))
-PY
-)
+  in_count=$(python3 "$PIPELINE_HELPERS" count-images --path "$WORK_ROOT/shards/gpu${idx}" --include-bmp)
 
   if [[ "$STOP_AFTER_STAGE" == "egoblur" ]]; then
     out_dir="$comfy_data_dir/output-egoblur/$batch"
@@ -565,17 +679,7 @@ PY
     out_dir="$comfy_data_dir/output/$batch"
   fi
 
-  out_count=$(python3 - <<'PY' "$out_dir"
-from pathlib import Path
-import sys
-exts = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp"}
-p = Path(sys.argv[1])
-if not p.exists():
-    print(0)
-else:
-    print(sum(1 for f in p.rglob('*') if f.is_file() and f.suffix.lower() in exts))
-PY
-)
+  out_count=$(python3 "$PIPELINE_HELPERS" count-images --path "$out_dir" --include-bmp)
 
   TOTAL_IN=$((TOTAL_IN + in_count))
   TOTAL_OUT=$((TOTAL_OUT + out_count))
@@ -584,13 +688,33 @@ PY
     FAIL=$((FAIL + 1))
   fi
 
-  summary_path=""
-  if [[ -f "$summary_file" ]]; then
-    summary_path="$(cat "$summary_file")"
+  shard_status="success"
+  if [[ "$rc" != "0" ]]; then
+    shard_status="failure"
   fi
 
-  echo "gpu=$gpu_id rc=$rc in_count=$in_count out_count=$out_count batch=$batch summary=${summary_path:-none}"
+  shard_event_args=(
+    --event shard_finished
+    --status "$shard_status"
+    --gpu-id "$gpu_id"
+    --shard-index "$idx"
+    --child-run-id "$child_run_id"
+    --container-name "$container"
+    --batch-name "$batch"
+    --metric input_count="$in_count"
+    --metric output_count="$out_count"
+    --path child_log_file="$child_log_file"
+    --path child_events_file="$child_events_file"
+    --path output_dir="$out_dir"
+  )
+  if [[ "$rc" =~ ^[0-9]+$ ]]; then
+    shard_event_args+=( --exit-code "$rc" )
+  fi
+  log_event "${shard_event_args[@]}"
+
+  echo "gpu=$gpu_id rc=$rc in_count=$in_count out_count=$out_count batch=$batch log=$child_log_file events=$child_events_file"
 done < "$LAUNCH_PLAN"
+clear_step
 
 echo "TOTAL_IN=$TOTAL_IN"
 echo "TOTAL_OUT=$TOTAL_OUT"
@@ -600,8 +724,10 @@ if [[ -n "${FINAL_OUTPUT_DIR:-}" ]]; then
   MERGED_ROOT="$FINAL_OUTPUT_DIR/$RUN_NAME"
   mkdir -p "$MERGED_ROOT"
   echo "Collecting per-shard outputs into $MERGED_ROOT"
+  log_event --event merge_start --status running --path merged_output="$MERGED_ROOT"
+  set_step merge_outputs
 
-  while IFS=$'\t' read -r gpu_id _ _ batch comfy_data_dir _ _ _; do
+  while IFS=$'\t' read -r gpu_id _ _ batch comfy_data_dir _ _ _ _ _ _; do
     if [[ "$STOP_AFTER_STAGE" == "egoblur" ]]; then
       src_dir="$comfy_data_dir/output-egoblur/$batch"
     elif [[ "$STOP_AFTER_STAGE" == "postprocess" ]]; then
@@ -612,38 +738,16 @@ if [[ -n "${FINAL_OUTPUT_DIR:-}" ]]; then
     dst_dir="$MERGED_ROOT/gpu${gpu_id}"
     mkdir -p "$dst_dir"
 
-    python3 - <<'PY' "$src_dir" "$dst_dir" "$STRICT_HARDLINK"
-import shutil
-import sys
-from pathlib import Path
-
-src = Path(sys.argv[1])
-dst = Path(sys.argv[2])
-strict_hardlink = sys.argv[3] == "1"
-if not src.exists():
-    raise SystemExit(0)
-
-for p in src.rglob('*'):
-    if not p.is_file():
-        continue
-    rel = p.relative_to(src)
-    target = dst / rel
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists():
-        target.unlink()
-    try:
-        target.hardlink_to(p)
-    except OSError as exc:
-        if strict_hardlink:
-            raise SystemExit(
-                f"Hardlink failed (STRICT_HARDLINK=1): {p} -> {target}: {exc}"
-            )
-        shutil.copy2(p, target)
-PY
+    python3 "$PIPELINE_HELPERS" link-tree \
+      --src "$src_dir" \
+      --dst "$dst_dir" \
+      --strict-hardlink "$STRICT_HARDLINK"
 
   done < "$LAUNCH_PLAN"
 
   echo "MERGED_OUTPUT=$MERGED_ROOT"
+  clear_step
+  log_event --event merge_end --status success --path merged_output="$MERGED_ROOT"
 fi
 
 if [[ "$FAIL" -gt 0 ]]; then
@@ -651,4 +755,7 @@ if [[ "$FAIL" -gt 0 ]]; then
   exit 1
 fi
 
+RUN_STATUS="success"
 echo "Multi-GPU run completed successfully."
+echo "Events: $EVENTS_FILE"
+echo "Log: $LOG_FILE"

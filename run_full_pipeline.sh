@@ -53,22 +53,260 @@ COMFY_MASK_NODE_ID="${COMFY_MASK_NODE_ID:-34}"
 COMFY_SAM3_MASK_NODE_ID="${COMFY_SAM3_MASK_NODE_ID:-60}"
 SKY_REFERENCE_SOURCE="${SKY_REFERENCE_SOURCE:-$REPO/inpainting-workflow-master/reference_sky.png}"
 SKY_REFERENCE_FILENAME="${SKY_REFERENCE_FILENAME:-chrome_xWUjmfs7m4.png}"
+PARENT_RUN_ID="${PARENT_RUN_ID:-}"
 PIPELINE_HELPERS="$REPO/inpainting-workflow-master/pipeline_helpers.py"
 CONTAINER_PIPELINE_HELPERS="/workspace/inpainting/pipeline_helpers.py"
-RUN_ID="$(date +%Y%m%d_%H%M%S)_${CONTAINER_NAME}_$$"
+RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)_${CONTAINER_NAME}_$$}"
 
 LOG_DIR="$REPO/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/fullrun_${RUN_ID}.log"
-SUMMARY_FILE="$LOG_DIR/fullrun_${RUN_ID}.summary.txt"
+EVENTS_FILE="$LOG_DIR/fullrun_${RUN_ID}.events.jsonl"
 
 exec > >(while IFS= read -r line; do printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$line"; done | tee -a "$LOG_FILE") 2>&1
 
 START_EPOCH=$(date +%s)
+END_EPOCH=0
+TOTAL_SEC=0
+
+RUN_STATUS="running"
+RUN_FINALIZED=0
+CURRENT_STAGE=""
+CURRENT_STAGE_STARTED_AT=0
+CURRENT_STAGE_COMMAND=""
+FAILED_STAGE=""
+FAILED_COMMAND=""
+FAILED_ERROR=""
+FAILED_EXIT_CODE=0
+
+HARDLINK_SEC=0
+SAM3_SEC=0
+INPAINT_SEC=0
+POSTPROCESS_SEC=0
+EGOBLUR_SEC=0
+COUNT_SEC=0
+
+SAM3_MASK_COUNT=0
+INPAINT_COUNT=0
+COUNT_INPUT=0
+COUNT_SAM3_MASK=0
+COUNT_INPAINT=0
+COUNT_POSTPROCESS=0
+COUNT_EGOBLUR=0
+
+HOST_INPUT_DIR="$SRC"
+CONTAINER_INPUT_DIR="$SRC"
+RESOLVED_INPUT_MODE=""
+FINAL_BATCH_DIR=""
+DST=""
+OUT1=""
+OUT_MASK=""
+OUT2=""
+OUT3=""
+
+EVENT_BASE_ARGS=(
+  append-event
+  --file "$EVENTS_FILE"
+  --run-type full_pipeline
+  --run-id "$RUN_ID"
+  --script run_full_pipeline.sh
+  --container-name "$CONTAINER_NAME"
+  --batch-name "$BATCH_NAME"
+)
+if [ -n "$PARENT_RUN_ID" ]; then
+  EVENT_BASE_ARGS+=( --parent-run-id "$PARENT_RUN_ID" )
+fi
+if [ -n "${NVIDIA_VISIBLE_DEVICES:-}" ] && [ "${NVIDIA_VISIBLE_DEVICES:-unset}" != "unset" ]; then
+  EVENT_BASE_ARGS+=( --gpu-id "${NVIDIA_VISIBLE_DEVICES}" )
+fi
+
+log_event() {
+  python3 "$PIPELINE_HELPERS" "${EVENT_BASE_ARGS[@]}" "$@" >/dev/null 2>&1 || true
+}
+
+quote_cmd() {
+  local quoted
+  printf -v quoted '%q ' "$@"
+  printf '%s' "${quoted% }"
+}
+
+start_stage() {
+  local stage="$1"
+  local command="${2:-}"
+  CURRENT_STAGE="$stage"
+  CURRENT_STAGE_STARTED_AT=$(date +%s)
+  CURRENT_STAGE_COMMAND="$command"
+  echo "=== STAGE_START $stage ==="
+  if [ -n "$command" ]; then
+    log_event --event stage_start --status running --stage "$stage" --command "$command"
+  else
+    log_event --event stage_start --status running --stage "$stage"
+  fi
+}
+
+finish_stage() {
+  local stage="$1"
+  local elapsed="$2"
+  shift 2
+  echo "=== STAGE_END $stage elapsed_sec=$elapsed ==="
+  log_event --event stage_end --status success --stage "$stage" --elapsed-sec "$elapsed" "$@"
+  CURRENT_STAGE=""
+  CURRENT_STAGE_STARTED_AT=0
+  CURRENT_STAGE_COMMAND=""
+}
+
+skip_stage() {
+  local stage="$1"
+  local reason="$2"
+  echo "=== STAGE_SKIP $stage reason=$reason elapsed_sec=0 ==="
+  log_event --event stage_skip --status skipped --stage "$stage" --reason "$reason"
+}
+
+fail_stage() {
+  local stage="$1"
+  local message="$2"
+  local exit_code="${3:-1}"
+  local elapsed=0
+  local -a event_args=(
+    --event stage_fail
+    --status failure
+    --stage "$stage"
+    --exit-code "$exit_code"
+    --error "$message"
+  )
+  if [ "$CURRENT_STAGE_STARTED_AT" -gt 0 ]; then
+    elapsed=$(( $(date +%s) - CURRENT_STAGE_STARTED_AT ))
+    event_args+=( --elapsed-sec "$elapsed" )
+  fi
+  if [ -n "$CURRENT_STAGE_COMMAND" ]; then
+    event_args+=( --command "$CURRENT_STAGE_COMMAND" )
+  fi
+  RUN_STATUS="failure"
+  FAILED_STAGE="$stage"
+  FAILED_COMMAND="$CURRENT_STAGE_COMMAND"
+  FAILED_ERROR="$message"
+  FAILED_EXIT_CODE="$exit_code"
+  echo "ERROR: $message"
+  log_event "${event_args[@]}"
+  CURRENT_STAGE=""
+  CURRENT_STAGE_STARTED_AT=0
+  CURRENT_STAGE_COMMAND=""
+  exit "$exit_code"
+}
+
+on_error() {
+  local exit_code="$1"
+  local line_no="$2"
+  local command="$3"
+  local stage="${CURRENT_STAGE:-runtime}"
+  local elapsed=0
+  RUN_STATUS="failure"
+  if [ "$CURRENT_STAGE_STARTED_AT" -gt 0 ]; then
+    elapsed=$(( $(date +%s) - CURRENT_STAGE_STARTED_AT ))
+  fi
+  if [ -z "$FAILED_STAGE" ]; then
+    FAILED_STAGE="$stage"
+  fi
+  if [ -z "$FAILED_COMMAND" ]; then
+    FAILED_COMMAND="$command"
+  fi
+  if [ -z "$FAILED_ERROR" ]; then
+    FAILED_ERROR="command failed at line $line_no"
+  fi
+  FAILED_EXIT_CODE="$exit_code"
+  log_event \
+    --event stage_fail \
+    --status failure \
+    --stage "$stage" \
+    --elapsed-sec "$elapsed" \
+    --exit-code "$exit_code" \
+    --command "$command" \
+    --error "command failed at line $line_no"
+  CURRENT_STAGE=""
+  CURRENT_STAGE_STARTED_AT=0
+  CURRENT_STAGE_COMMAND=""
+}
+
+on_exit() {
+  local exit_code="$1"
+  local final_status="success"
+  local -a event_args=(
+    --event run_end
+    --status success
+  )
+
+  if [ "$RUN_FINALIZED" -eq 1 ]; then
+    return
+  fi
+  RUN_FINALIZED=1
+
+  END_EPOCH=$(date +%s)
+  TOTAL_SEC=$((END_EPOCH - START_EPOCH))
+
+  if [ "$exit_code" -ne 0 ] || [ "$RUN_STATUS" = "failure" ]; then
+    final_status="failure"
+    event_args=( --event run_end --status failure )
+  fi
+
+  event_args+=(
+    --elapsed-sec "$TOTAL_SEC"
+    --metric stage_hardlink_sec="$HARDLINK_SEC"
+    --metric stage_sam3_mask_sec="$SAM3_SEC"
+    --metric stage_inpainting_sec="$INPAINT_SEC"
+    --metric stage_postprocess_sec="$POSTPROCESS_SEC"
+    --metric stage_egoblur_sec="$EGOBLUR_SEC"
+    --metric stage_counts_sec="$COUNT_SEC"
+    --metric count_input="$COUNT_INPUT"
+    --metric count_sam3_mask="$COUNT_SAM3_MASK"
+    --metric count_inpainting="$COUNT_INPAINT"
+    --metric count_postprocess="$COUNT_POSTPROCESS"
+    --metric count_egoblur="$COUNT_EGOBLUR"
+    --path log_file="$LOG_FILE"
+    --path events_file="$EVENTS_FILE"
+  )
+
+  if [ -n "$RESOLVED_INPUT_MODE" ]; then
+    event_args+=( --param input_mode_resolved="$RESOLVED_INPUT_MODE" )
+  fi
+  if [ -n "$HOST_INPUT_DIR" ]; then
+    event_args+=( --path local_input_dir="$HOST_INPUT_DIR" )
+  fi
+  if [ -n "$CONTAINER_INPUT_DIR" ]; then
+    event_args+=( --path container_input_dir="$CONTAINER_INPUT_DIR" )
+  fi
+  if [ -n "$OUT_MASK" ]; then
+    event_args+=( --path local_sam3_mask_dir="$OUT_MASK" )
+  fi
+  if [ -n "$OUT3" ]; then
+    event_args+=( --path local_out_dir="$OUT3" )
+  fi
+  if [ -n "$FINAL_BATCH_DIR" ]; then
+    event_args+=( --path final_out_dir="$FINAL_BATCH_DIR" )
+  fi
+  if [ "$final_status" = "failure" ]; then
+    if [ -n "$FAILED_STAGE" ]; then
+      event_args+=( --stage "$FAILED_STAGE" )
+    fi
+    if [ "$FAILED_EXIT_CODE" -ne 0 ]; then
+      event_args+=( --exit-code "$FAILED_EXIT_CODE" )
+    fi
+    if [ -n "$FAILED_COMMAND" ]; then
+      event_args+=( --command "$FAILED_COMMAND" )
+    fi
+    if [ -n "$FAILED_ERROR" ]; then
+      event_args+=( --error "$FAILED_ERROR" )
+    fi
+  fi
+
+  log_event "${event_args[@]}"
+}
+
+trap 'on_error $? $LINENO "$BASH_COMMAND"' ERR
+trap 'on_exit $?' EXIT
 
 echo "RUN_ID=$RUN_ID"
 echo "LOG_FILE=$LOG_FILE"
-echo "SUMMARY_FILE=$SUMMARY_FILE"
+echo "EVENTS_FILE=$EVENTS_FILE"
 echo "REPO=$REPO"
 echo "SRC=$SRC"
 echo "BATCH_NAME=$BATCH_NAME"
@@ -120,6 +358,47 @@ mkdir -p \
   "$COMFYUI_DATA_DIR/output-egoblur" \
   "$MODELS_COMFYUI_DIR" \
   "$MODELS_PRIVACY_DIR"
+
+RUN_START_ARGS=(
+  --event run_start
+  --status running
+  --param input_mode="$INPUT_MODE"
+  --param downstream_mode="$DOWNSTREAM_MODE"
+  --param stop_after_stage="$STOP_AFTER_STAGE"
+  --param force_reprocess="$FORCE_REPROCESS"
+  --param strict_hardlink="$STRICT_HARDLINK"
+  --param postprocess_workers="$POSTPROCESS_WORKERS"
+  --param privacy_workers="$PRIVACY_WORKERS"
+  --param sam3_workers="$SAM3_WORKERS"
+  --param sam3_resize_width="$SAM3_RESIZE_WIDTH"
+  --param sam3_resize_height="$SAM3_RESIZE_HEIGHT"
+  --param sam3_glare_threshold="$SAM3_GLARE_THRESHOLD"
+  --param sam3_tile_rows="$SAM3_TILE_ROWS"
+  --param sam3_tile_cols="$SAM3_TILE_COLS"
+  --param sam3_script="$SAM3_SCRIPT"
+  --param laplacian_dilation="$LAPLACIAN_DILATION"
+  --param laplacian_blur="$LAPLACIAN_BLUR"
+  --param laplacian_levels="$LAPLACIAN_LEVELS"
+  --param privacy_face_model="$PRIVACY_FACE_MODEL"
+  --param privacy_lp_model="$PRIVACY_LP_MODEL"
+  --param privacy_output_mode="$PRIVACY_OUTPUT_MODE"
+  --param comfy_image_node_id="$COMFY_IMAGE_NODE_ID"
+  --param comfy_mask_node_id="$COMFY_MASK_NODE_ID"
+  --param comfy_sam3_mask_node_id="$COMFY_SAM3_MASK_NODE_ID"
+  --path log_file="$LOG_FILE"
+  --path events_file="$EVENTS_FILE"
+  --path repo="$REPO"
+  --path source_dir="$SRC"
+  --path comfyui_data_dir="$COMFYUI_DATA_DIR"
+  --path sam3_mask_dir="$COMFYUI_DATA_DIR/output-sam3-mask/$BATCH_NAME"
+  --path inpainting_dir="$COMFYUI_DATA_DIR/output/$BATCH_NAME"
+  --path postprocess_dir="$COMFYUI_DATA_DIR/output-postprocessed/$BATCH_NAME"
+  --path egoblur_dir="$COMFYUI_DATA_DIR/output-egoblur/$BATCH_NAME"
+)
+if [ -n "$FINAL_OUTPUT_DIR" ]; then
+  RUN_START_ARGS+=( --path final_out_dir="$FINAL_OUTPUT_DIR/$BATCH_NAME" )
+fi
+log_event "${RUN_START_ARGS[@]}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "ERROR: docker is not installed or not in PATH."
@@ -404,23 +683,24 @@ else
 fi
 mkdir -p "$DST" "$OUT1" "$OUT_MASK" "$OUT2" "$OUT3"
 
-HARDLINK_SEC=0
 if [ "$USE_STAGED_INPUT" = "1" ]; then
   S_HARD=$(date +%s)
-  echo "=== STAGE_START hardlink_stage ==="
+  HARDLINK_CMD=$(quote_cmd python3 "$PIPELINE_HELPERS" stage-images --src "$SRC" --dst "$DST" --strict-hardlink "$STRICT_HARDLINK")
+  start_stage hardlink_stage "$HARDLINK_CMD"
   python3 "$PIPELINE_HELPERS" stage-images \
     --src "$SRC" \
     --dst "$DST" \
     --strict-hardlink "$STRICT_HARDLINK"
   E_HARD=$(date +%s)
   HARDLINK_SEC=$((E_HARD - S_HARD))
-  echo "=== STAGE_END hardlink_stage elapsed_sec=$HARDLINK_SEC ==="
+  finish_stage hardlink_stage "$HARDLINK_SEC"
 else
-  echo "=== STAGE_SKIP hardlink_stage reason=direct_input elapsed_sec=0 ==="
+  skip_stage hardlink_stage direct_input
 fi
 
 S_SAM3=$(date +%s)
-echo "=== STAGE_START sam3_mask ==="
+SAM3_CMD=$(quote_cmd docker exec "$CONTAINER_NAME" python "/workspace/inpainting/$SAM3_SCRIPT" --input-dir "$CONTAINER_INPUT_DIR" --output-dir "/workspace/output-sam3-mask/$BATCH_NAME" --pattern "*" --glare-threshold "$SAM3_GLARE_THRESHOLD" --tile-rows "$SAM3_TILE_ROWS" --tile-cols "$SAM3_TILE_COLS" --resize-width "$SAM3_RESIZE_WIDTH" --resize-height "$SAM3_RESIZE_HEIGHT" --workers "$SAM3_WORKERS")
+start_stage sam3_mask "$SAM3_CMD"
 docker exec "$CONTAINER_NAME" python "/workspace/inpainting/$SAM3_SCRIPT" \
   --input-dir "$CONTAINER_INPUT_DIR" \
   --output-dir /workspace/output-sam3-mask/$BATCH_NAME \
@@ -433,26 +713,22 @@ docker exec "$CONTAINER_NAME" python "/workspace/inpainting/$SAM3_SCRIPT" \
   --workers "$SAM3_WORKERS"
 E_SAM3=$(date +%s)
 SAM3_SEC=$((E_SAM3 - S_SAM3))
-echo "=== STAGE_END sam3_mask elapsed_sec=$SAM3_SEC ==="
 
 SAM3_MASK_COUNT=$(python3 "$PIPELINE_HELPERS" count-images --path "$OUT_MASK" --include-bmp)
 echo "sam3_mask_output_count=$SAM3_MASK_COUNT"
 if [ "$SAM3_MASK_COUNT" -eq 0 ]; then
-  echo "ERROR: No SAM3 mask outputs found in $OUT_MASK; aborting downstream stages."
-  exit 1
+  fail_stage sam3_mask "No SAM3 mask outputs found in $OUT_MASK; aborting downstream stages."
 fi
-
-INPAINT_SEC=0
-POSTPROCESS_SEC=0
-EGOBLUR_SEC=0
+finish_stage sam3_mask "$SAM3_SEC" --metric output_count="$SAM3_MASK_COUNT"
 
 if [ "$STOP_AFTER_STAGE" = "sam3" ]; then
-  echo "=== STAGE_SKIP inpainting reason=STOP_AFTER_STAGE=sam3 elapsed_sec=0 ==="
-  echo "=== STAGE_SKIP postprocess reason=STOP_AFTER_STAGE=sam3 elapsed_sec=0 ==="
-  echo "=== STAGE_SKIP egoblur reason=STOP_AFTER_STAGE=sam3 elapsed_sec=0 ==="
+  skip_stage inpainting STOP_AFTER_STAGE=sam3
+  skip_stage postprocess STOP_AFTER_STAGE=sam3
+  skip_stage egoblur STOP_AFTER_STAGE=sam3
 else
   S_INP=$(date +%s)
-  echo "=== STAGE_START inpainting ==="
+  INPAINT_CMD=$(quote_cmd docker exec "$CONTAINER_NAME" python /workspace/inpainting/comfyui_run.py --workflow-json /workspace/workflow.json --input-dir "$CONTAINER_INPUT_DIR" --mask /workspace/ComfyUI/input/perspective_mask.png --sam3-mask-dir "/workspace/output-sam3-mask/$BATCH_NAME" --output-dir "/workspace/ComfyUI/output/$BATCH_NAME" --image-node-id "$COMFY_IMAGE_NODE_ID" --mask-node-id "$COMFY_MASK_NODE_ID" --sam3-mask-node-id "$COMFY_SAM3_MASK_NODE_ID" --workers 1 --timeout-s 3600)
+  start_stage inpainting "$INPAINT_CMD"
   docker exec "$CONTAINER_NAME" python /workspace/inpainting/comfyui_run.py \
     --workflow-json /workspace/workflow.json \
     --input-dir "$CONTAINER_INPUT_DIR" \
@@ -466,18 +742,17 @@ else
     --timeout-s 3600
   E_INP=$(date +%s)
   INPAINT_SEC=$((E_INP - S_INP))
-  echo "=== STAGE_END inpainting elapsed_sec=$INPAINT_SEC ==="
 
   INPAINT_COUNT=$(python3 "$PIPELINE_HELPERS" count-images --path "$OUT1")
   echo "inpainting_output_count=$INPAINT_COUNT"
   if [ "$INPAINT_COUNT" -eq 0 ]; then
-    echo "ERROR: No inpainting outputs found in $OUT1; aborting downstream stages."
-    exit 1
+    fail_stage inpainting "No inpainting outputs found in $OUT1; aborting downstream stages."
   fi
+  finish_stage inpainting "$INPAINT_SEC" --metric output_count="$INPAINT_COUNT"
 
   if [ "$STOP_AFTER_STAGE" = "inpainting" ]; then
-    echo "=== STAGE_SKIP postprocess reason=STOP_AFTER_STAGE=inpainting elapsed_sec=0 ==="
-    echo "=== STAGE_SKIP egoblur reason=STOP_AFTER_STAGE=inpainting elapsed_sec=0 ==="
+    skip_stage postprocess STOP_AFTER_STAGE=inpainting
+    skip_stage egoblur STOP_AFTER_STAGE=inpainting
   else
     if [ "$STOP_AFTER_STAGE" = "egoblur" ]; then
       : # privacy blur now runs inside container; no host-side setup needed
@@ -488,8 +763,9 @@ else
     fi
 
     S_POST=$(date +%s)
-    echo "=== STAGE_START postprocess ==="
     if [ "$DOWNSTREAM_MODE" = "inline" ]; then
+      POST_CMD=$(quote_cmd docker exec -u "$(id -u):$(id -g)" -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt "$CONTAINER_NAME" python /workspace/inpainting/postprocess.py -i "/workspace/ComfyUI/output/$BATCH_NAME" -o "/workspace/output-postprocessed/$BATCH_NAME" --top-mask /workspace/inpainting/sky_mask_updated.png --sam3-mask-dir "/workspace/output-sam3-mask/$BATCH_NAME" --dilation "$LAPLACIAN_DILATION" --blur "$LAPLACIAN_BLUR" --levels "$LAPLACIAN_LEVELS" --pattern "*.jpg" -j "$POSTPROCESS_WORKERS")
+      start_stage postprocess "$POST_CMD"
       docker exec \
         -u "$(id -u):$(id -g)" \
         -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt \
@@ -521,6 +797,8 @@ else
       if [ -d "$TORCH_CACHE_DIR" ]; then
         POST_DOCKER_ARGS+=( -v "$TORCH_CACHE_DIR:/root/.cache/torch" )
       fi
+      POST_CMD=$(quote_cmd docker run "${POST_DOCKER_ARGS[@]}" "$COMFY_IMAGE" python /workspace/inpainting/postprocess.py -i "/workspace/ComfyUI/output/$BATCH_NAME" -o "/workspace/output-postprocessed/$BATCH_NAME" --top-mask /workspace/inpainting/sky_mask_updated.png --sam3-mask-dir "/workspace/output-sam3-mask/$BATCH_NAME" --dilation "$LAPLACIAN_DILATION" --blur "$LAPLACIAN_BLUR" --levels "$LAPLACIAN_LEVELS" --pattern "*.jpg" -j "$POSTPROCESS_WORKERS")
+      start_stage postprocess "$POST_CMD"
       docker run "${POST_DOCKER_ARGS[@]}" "$COMFY_IMAGE" \
         python /workspace/inpainting/postprocess.py \
         -i /workspace/ComfyUI/output/$BATCH_NAME \
@@ -535,13 +813,12 @@ else
     fi
     E_POST=$(date +%s)
     POSTPROCESS_SEC=$((E_POST - S_POST))
-    echo "=== STAGE_END postprocess elapsed_sec=$POSTPROCESS_SEC ==="
+    finish_stage postprocess "$POSTPROCESS_SEC"
 
     if [ "$STOP_AFTER_STAGE" = "postprocess" ]; then
-      echo "=== STAGE_SKIP egoblur reason=STOP_AFTER_STAGE=postprocess elapsed_sec=0 ==="
+      skip_stage egoblur STOP_AFTER_STAGE=postprocess
     else
       S_EGO=$(date +%s)
-      echo "=== STAGE_START egoblur ==="
       EGO_DOCKER_ARGS=(
         --rm
         --name "egoblur-${RUN_ID}"
@@ -571,11 +848,13 @@ else
       if [ "$FORCE_REPROCESS" = "1" ]; then
         EGO_CMD+=( --overwrite )
       fi
+      EGO_CMD_STR=$(quote_cmd docker run "${EGO_DOCKER_ARGS[@]}" "$COMFY_IMAGE" "${EGO_CMD[@]}")
+      start_stage egoblur "$EGO_CMD_STR"
       docker run "${EGO_DOCKER_ARGS[@]}" "$COMFY_IMAGE" "${EGO_CMD[@]}"
 
       E_EGO=$(date +%s)
       EGOBLUR_SEC=$((E_EGO - S_EGO))
-      echo "=== STAGE_END egoblur elapsed_sec=$EGOBLUR_SEC ==="
+      finish_stage egoblur "$EGOBLUR_SEC"
     fi
   fi
 fi
@@ -590,42 +869,34 @@ if [ -n "$FINAL_OUTPUT_DIR" ] && [ "$STOP_AFTER_STAGE" = "egoblur" ]; then
 fi
 
 S_COUNT=$(date +%s)
-echo "=== STAGE_START counts ==="
-python3 "$PIPELINE_HELPERS" report-counts \
+COUNTS_CMD=$(quote_cmd python3 "$PIPELINE_HELPERS" report-counts --input-dir "$HOST_INPUT_DIR" --sam3-dir "$OUT_MASK" --inpainting-dir "$OUT1" --postprocess-dir "$OUT2" --egoblur-dir "$OUT3")
+start_stage counts "$COUNTS_CMD"
+mapfile -t COUNT_LINES < <(python3 "$PIPELINE_HELPERS" report-counts \
   --input-dir "$HOST_INPUT_DIR" \
   --sam3-dir "$OUT_MASK" \
   --inpainting-dir "$OUT1" \
   --postprocess-dir "$OUT2" \
-  --egoblur-dir "$OUT3"
+  --egoblur-dir "$OUT3")
+for count_line in "${COUNT_LINES[@]}"; do
+  echo "$count_line"
+  case "$count_line" in
+    count_input=*) COUNT_INPUT="${count_line#*=}" ;;
+    count_sam3_mask=*) COUNT_SAM3_MASK="${count_line#*=}" ;;
+    count_inpainting=*) COUNT_INPAINT="${count_line#*=}" ;;
+    count_postprocess=*) COUNT_POSTPROCESS="${count_line#*=}" ;;
+    count_egoblur=*) COUNT_EGOBLUR="${count_line#*=}" ;;
+  esac
+done
 E_COUNT=$(date +%s)
 COUNT_SEC=$((E_COUNT - S_COUNT))
-echo "=== STAGE_END counts elapsed_sec=$COUNT_SEC ==="
+finish_stage counts "$COUNT_SEC" \
+  --metric count_input="$COUNT_INPUT" \
+  --metric count_sam3_mask="$COUNT_SAM3_MASK" \
+  --metric count_inpainting="$COUNT_INPAINT" \
+  --metric count_postprocess="$COUNT_POSTPROCESS" \
+  --metric count_egoblur="$COUNT_EGOBLUR"
 
-END_EPOCH=$(date +%s)
-TOTAL_SEC=$((END_EPOCH - START_EPOCH))
-
-{
-  echo "run_id=$RUN_ID"
-  echo "start_epoch=$START_EPOCH"
-  echo "end_epoch=$END_EPOCH"
-  echo "total_sec=$TOTAL_SEC"
-  printf "total_hms=%02d:%02d:%02d\n" $((TOTAL_SEC / 3600)) $(((TOTAL_SEC % 3600) / 60)) $((TOTAL_SEC % 60))
-  echo "stage_hardlink_sec=$HARDLINK_SEC"
-  echo "stage_sam3_mask_sec=$SAM3_SEC"
-  echo "stage_inpainting_sec=$INPAINT_SEC"
-  echo "stage_postprocess_sec=$POSTPROCESS_SEC"
-  echo "stage_egoblur_sec=$EGOBLUR_SEC"
-  echo "stage_counts_sec=$COUNT_SEC"
-  echo "input_mode_resolved=$RESOLVED_INPUT_MODE"
-  echo "local_input_dir=$HOST_INPUT_DIR"
-  echo "container_input_dir=$CONTAINER_INPUT_DIR"
-  echo "local_sam3_mask_dir=$OUT_MASK"
-  echo "local_out_dir=$OUT3"
-  if [ -n "$FINAL_OUTPUT_DIR" ] && [ "$STOP_AFTER_STAGE" = "egoblur" ]; then
-    echo "final_out_dir=$FINAL_OUTPUT_DIR/$BATCH_NAME"
-  fi
-} | tee "$SUMMARY_FILE"
-
+RUN_STATUS="success"
 echo "DONE"
-echo "Summary: $SUMMARY_FILE"
+echo "Events: $EVENTS_FILE"
 echo "Log: $LOG_FILE"

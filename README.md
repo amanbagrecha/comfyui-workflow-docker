@@ -7,6 +7,7 @@ Complete Docker-based pipeline for 360° image inpainting with SAM3 segmentation
 - [Required Files & Directory Structure](#required-files--directory-structure)
 - [Setup Instructions](#setup-instructions)
 - [Running the Pipeline](#running-the-pipeline)
+- [Run Logs](#run-logs)
 - [Pipeline Scripts](#pipeline-scripts)
 - [Monitoring & Troubleshooting](#monitoring--troubleshooting)
 
@@ -155,6 +156,7 @@ Notes:
 - `SRC` is your image folder.
 - Final privacy-blur outputs are copied to `FINAL_OUTPUT_DIR/<run-name>/gpu<id>/`.
 - Intermediate outputs are stored under `comfyui_data/<container-name>/` per GPU shard (for example, `comfyui-g0`, `comfyui-g1`).
+- Run logs are written under `logs/` as `multigpu_<RUN_NAME>.log` / `multigpu_<RUN_NAME>.events.jsonl`, plus one per-shard pair `fullrun_<RUN_NAME>_g<gpu_id>.log` / `fullrun_<RUN_NAME>_g<gpu_id>.events.jsonl`.
 - Defaults: `POSTPROCESS_WORKERS=3`, `PRIVACY_WORKERS=4`, `SAM3_WORKERS=4`.
 - Default rerun behavior is skip/resume (`FORCE_REPROCESS=0`); set `FORCE_REPROCESS=1` to clear the batch and rerun from scratch.
 
@@ -423,6 +425,41 @@ ls -lah "$FINAL_OUTPUT_DIR/$RUN_NAME"
 
 ---
 
+## Run Logs
+
+Each run writes a text log and a structured event log under `logs/`:
+
+- multi-GPU orchestrator: `logs/multigpu_<RUN_NAME>.log`, `logs/multigpu_<RUN_NAME>.events.jsonl`
+- per-shard/full run: `logs/fullrun_<RUN_ID>.log`, `logs/fullrun_<RUN_ID>.events.jsonl`
+
+When launched by `run_multi_gpu_pipeline.sh`, each shard uses `RUN_ID=<RUN_NAME>_g<gpu_id>`, so GPU 0 writes `logs/fullrun_<RUN_NAME>_g0.log` and `logs/fullrun_<RUN_NAME>_g0.events.jsonl`.
+
+`multigpu_*.events.jsonl` contains orchestrator events only. `fullrun_*.events.jsonl` contains shard stage events only. Each line is one JSON object with fields like `ts`, `run_type`, `run_id`, `event`, `status`, plus `params`, `metrics`, and `paths`.
+
+Quick ways to consume them:
+
+```bash
+tail -f "logs/multigpu_${RUN_NAME}.log"
+tail -f "logs/multigpu_${RUN_NAME}.events.jsonl"
+tail -f "logs/fullrun_${RUN_NAME}_g0.events.jsonl"
+```
+
+```bash
+python3 - <<'PY' "logs/multigpu_${RUN_NAME}.events.jsonl" "logs/fullrun_${RUN_NAME}_g0.events.jsonl"
+import json
+import sys
+
+for path in sys.argv[1:]:
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            event = json.loads(line)
+            if event.get("status") == "failure":
+                print(path, event.get("event"), event.get("stage"), event.get("error"))
+PY
+```
+
+---
+
 ## Pipeline Scripts
 
 ### Script Options
@@ -485,6 +522,12 @@ Options:
 ### Container Management
 
 ```bash
+# Pipeline launcher logs
+tail -f logs/multigpu_<run-name>.log
+tail -f logs/multigpu_<run-name>.events.jsonl
+tail -f logs/fullrun_<run-id>.log
+tail -f logs/fullrun_<run-id>.events.jsonl
+
 # View logs
 docker logs comfyui-container --tail 100
 docker logs -f comfyui-container  # Follow logs

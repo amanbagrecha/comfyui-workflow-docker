@@ -263,6 +263,14 @@ Count-check rule before/after privacy blur:
 - Final privacy-blur output: `comfyui_data/<container-name>/output-egoblur/<batch-name>`
 - Optional copied final output: `FINAL_OUTPUT_DIR/<batch-name>`
 
+## Logging Artifacts
+- Multi-GPU runs write `logs/multigpu_<RUN_NAME>.log` and `logs/multigpu_<RUN_NAME>.events.jsonl`.
+- Per-shard/full runs write `logs/fullrun_<RUN_ID>.log` and `logs/fullrun_<RUN_ID>.events.jsonl`.
+- In multi-GPU runs, shard `RUN_ID` is deterministic: `<RUN_NAME>_g<gpu_id>`.
+- `multigpu_*.events.jsonl` contains orchestrator events only; `fullrun_*.events.jsonl` contains shard stage events only.
+- There is no `summary.txt` run artifact anymore.
+- Consume structured logs as JSONL: one JSON object per line via Python `json.loads`, `jq`, W&B, or any JSONL-compatible collector.
+
 ## SAM3 Tiled Workflow TODOs
 - [ ] Measure average per-image runtime for `sam3_tiled_mask.py` and record timings for at least one real batch.
 - [ ] Compare resolution choices (`4000x2000` vs `2000x4000`) and decide the default target size based on quality + speed.

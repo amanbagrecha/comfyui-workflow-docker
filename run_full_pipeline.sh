@@ -53,6 +53,8 @@ COMFY_MASK_NODE_ID="${COMFY_MASK_NODE_ID:-34}"
 COMFY_SAM3_MASK_NODE_ID="${COMFY_SAM3_MASK_NODE_ID:-60}"
 SKY_REFERENCE_SOURCE="${SKY_REFERENCE_SOURCE:-$REPO/inpainting-workflow-master/reference_sky.png}"
 SKY_REFERENCE_FILENAME="${SKY_REFERENCE_FILENAME:-chrome_xWUjmfs7m4.png}"
+PIPELINE_HELPERS="$REPO/inpainting-workflow-master/pipeline_helpers.py"
+CONTAINER_PIPELINE_HELPERS="/workspace/inpainting/pipeline_helpers.py"
 RUN_ID="$(date +%Y%m%d_%H%M%S)_${CONTAINER_NAME}_$$"
 
 LOG_DIR="$REPO/logs"
@@ -342,35 +344,11 @@ MODELS_COMFYUI_DIR="$MODELS_COMFYUI_DIR" \
 docker compose -p "${CONTAINER_NAME}" up -d
 
 echo "Waiting for ComfyUI API readiness inside container"
-docker exec -i \
-  -e COMFY_READY_TIMEOUT="$COMFY_READY_TIMEOUT" \
-  -e COMFY_READY_POLL="$COMFY_READY_POLL" \
-  "$CONTAINER_NAME" \
-  python - <<'PY'
-import os
-import sys
-import time
-import urllib.request
-
-timeout = int(os.environ["COMFY_READY_TIMEOUT"])
-poll = float(os.environ["COMFY_READY_POLL"])
-url = "http://127.0.0.1:8188/system_stats"
-deadline = time.time() + timeout
-last_error = None
-
-while time.time() < deadline:
-    try:
-        with urllib.request.urlopen(url, timeout=5) as response:
-            if response.status == 200:
-                print("ComfyUI API ready")
-                sys.exit(0)
-    except Exception as exc:  # pragma: no cover - runtime readiness polling
-        last_error = exc
-    time.sleep(poll)
-
-print(f"ERROR: ComfyUI API not ready within {timeout}s. Last error: {last_error}")
-sys.exit(1)
-PY
+docker exec "$CONTAINER_NAME" \
+  python "$CONTAINER_PIPELINE_HELPERS" wait-http \
+  --url http://127.0.0.1:8188/system_stats \
+  --timeout "$COMFY_READY_TIMEOUT" \
+  --poll "$COMFY_READY_POLL"
 
 DST="$COMFYUI_DATA_DIR/input/$BATCH_NAME"
 OUT1="$COMFYUI_DATA_DIR/output/$BATCH_NAME"
@@ -430,44 +408,10 @@ HARDLINK_SEC=0
 if [ "$USE_STAGED_INPUT" = "1" ]; then
   S_HARD=$(date +%s)
   echo "=== STAGE_START hardlink_stage ==="
-  export SRC DST
-  python3 - <<'PY'
-import shutil
-import os
-from pathlib import Path
-
-src = Path(os.environ["SRC"])
-dst = Path(os.environ["DST"])
-strict_hardlink = os.environ.get("STRICT_HARDLINK", "1") == "1"
-exts = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
-
-images = [p for p in sorted(src.iterdir()) if p.is_file() and p.suffix.lower() in exts]
-for image in images:
-    target = dst / image.name
-    if target.exists():
-        src_stat = image.stat()
-        dst_stat = target.stat()
-        same_inode = src_stat.st_dev == dst_stat.st_dev and src_stat.st_ino == dst_stat.st_ino
-        if same_inode:
-            continue
-        if strict_hardlink:
-            raise SystemExit(
-                f"Hardlink requirement failed (STRICT_HARDLINK=1): existing target is not a hardlink: {target}"
-            )
-        shutil.copy2(image, target)
-        continue
-
-    try:
-        target.hardlink_to(image)
-    except OSError as exc:
-        if strict_hardlink:
-            raise SystemExit(
-                f"Hardlink failed (STRICT_HARDLINK=1): {image} -> {target}: {exc}"
-            )
-        shutil.copy2(image, target)
-
-print(f"staged_images={len(images)}")
-PY
+  python3 "$PIPELINE_HELPERS" stage-images \
+    --src "$SRC" \
+    --dst "$DST" \
+    --strict-hardlink "$STRICT_HARDLINK"
   E_HARD=$(date +%s)
   HARDLINK_SEC=$((E_HARD - S_HARD))
   echo "=== STAGE_END hardlink_stage elapsed_sec=$HARDLINK_SEC ==="
@@ -491,17 +435,7 @@ E_SAM3=$(date +%s)
 SAM3_SEC=$((E_SAM3 - S_SAM3))
 echo "=== STAGE_END sam3_mask elapsed_sec=$SAM3_SEC ==="
 
-export OUT_MASK
-SAM3_MASK_COUNT=$(python3 - <<'PY'
-import os
-from pathlib import Path
-
-exts = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp"}
-root = Path(os.environ["OUT_MASK"])
-count = sum(1 for p in root.rglob("*") if p.is_file() and p.suffix.lower() in exts)
-print(count)
-PY
-)
+SAM3_MASK_COUNT=$(python3 "$PIPELINE_HELPERS" count-images --path "$OUT_MASK" --include-bmp)
 echo "sam3_mask_output_count=$SAM3_MASK_COUNT"
 if [ "$SAM3_MASK_COUNT" -eq 0 ]; then
   echo "ERROR: No SAM3 mask outputs found in $OUT_MASK; aborting downstream stages."
@@ -534,17 +468,7 @@ else
   INPAINT_SEC=$((E_INP - S_INP))
   echo "=== STAGE_END inpainting elapsed_sec=$INPAINT_SEC ==="
 
-  export OUT1
-  INPAINT_COUNT=$(python3 - <<'PY'
-import os
-from pathlib import Path
-
-exts = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
-root = Path(os.environ["OUT1"])
-count = sum(1 for p in root.rglob("*") if p.is_file() and p.suffix.lower() in exts)
-print(count)
-PY
-)
+  INPAINT_COUNT=$(python3 "$PIPELINE_HELPERS" count-images --path "$OUT1")
   echo "inpainting_output_count=$INPAINT_COUNT"
   if [ "$INPAINT_COUNT" -eq 0 ]; then
     echo "ERROR: No inpainting outputs found in $OUT1; aborting downstream stages."
@@ -659,55 +583,20 @@ fi
 if [ -n "$FINAL_OUTPUT_DIR" ] && [ "$STOP_AFTER_STAGE" = "egoblur" ]; then
   FINAL_BATCH_DIR="$FINAL_OUTPUT_DIR/$BATCH_NAME"
   mkdir -p "$FINAL_BATCH_DIR"
-  export OUT3 FINAL_BATCH_DIR STRICT_HARDLINK
-  python3 - <<'PY'
-import os
-import shutil
-from pathlib import Path
-
-src = Path(os.environ["OUT3"])
-dst = Path(os.environ["FINAL_BATCH_DIR"])
-strict_hardlink = os.environ.get("STRICT_HARDLINK", "1") == "1"
-for file in src.iterdir():
-    if not file.is_file():
-        continue
-    target = dst / file.name
-    try:
-        if target.exists():
-            target.unlink()
-        target.hardlink_to(file)
-    except OSError as exc:
-        if strict_hardlink:
-            raise SystemExit(
-                f"Hardlink failed (STRICT_HARDLINK=1): {file} -> {target}: {exc}"
-            )
-        shutil.copy2(file, target)
-
-print(f"final_output_written={dst}")
-PY
+  python3 "$PIPELINE_HELPERS" link-flat \
+    --src "$OUT3" \
+    --dst "$FINAL_BATCH_DIR" \
+    --strict-hardlink "$STRICT_HARDLINK"
 fi
 
 S_COUNT=$(date +%s)
 echo "=== STAGE_START counts ==="
-export HOST_INPUT_DIR OUT_MASK OUT1 OUT2 OUT3
-python3 - <<'PY'
-import os
-from pathlib import Path
-
-exts = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
-
-
-def count_images(path: str) -> int:
-    root = Path(path)
-    return sum(1 for p in root.rglob("*") if p.is_file() and p.suffix.lower() in exts)
-
-
-print(f"count_input={count_images(os.environ['HOST_INPUT_DIR'])}")
-print(f"count_sam3_mask={count_images(os.environ['OUT_MASK'])}")
-print(f"count_inpainting={count_images(os.environ['OUT1'])}")
-print(f"count_postprocess={count_images(os.environ['OUT2'])}")
-print(f"count_egoblur={count_images(os.environ['OUT3'])}")
-PY
+python3 "$PIPELINE_HELPERS" report-counts \
+  --input-dir "$HOST_INPUT_DIR" \
+  --sam3-dir "$OUT_MASK" \
+  --inpainting-dir "$OUT1" \
+  --postprocess-dir "$OUT2" \
+  --egoblur-dir "$OUT3"
 E_COUNT=$(date +%s)
 COUNT_SEC=$((E_COUNT - S_COUNT))
 echo "=== STAGE_END counts elapsed_sec=$COUNT_SEC ==="
@@ -727,34 +616,6 @@ TOTAL_SEC=$((END_EPOCH - START_EPOCH))
   echo "stage_postprocess_sec=$POSTPROCESS_SEC"
   echo "stage_egoblur_sec=$EGOBLUR_SEC"
   echo "stage_counts_sec=$COUNT_SEC"
-  echo "laplacian_dilation=$LAPLACIAN_DILATION"
-  echo "laplacian_blur=$LAPLACIAN_BLUR"
-  echo "laplacian_levels=$LAPLACIAN_LEVELS"
-  echo "privacy_workers=$PRIVACY_WORKERS"
-  echo "sam3_resize_width=$SAM3_RESIZE_WIDTH"
-  echo "sam3_resize_height=$SAM3_RESIZE_HEIGHT"
-  echo "sam3_glare_threshold=$SAM3_GLARE_THRESHOLD"
-  echo "sam3_tile_rows=$SAM3_TILE_ROWS"
-  echo "sam3_tile_cols=$SAM3_TILE_COLS"
-  echo "sam3_script=$SAM3_SCRIPT"
-  echo "comfy_image_node_id=$COMFY_IMAGE_NODE_ID"
-  echo "comfy_mask_node_id=$COMFY_MASK_NODE_ID"
-  echo "comfy_sam3_mask_node_id=$COMFY_SAM3_MASK_NODE_ID"
-  echo "sky_reference_source=$SKY_REFERENCE_SOURCE"
-  echo "sky_reference_filename=$SKY_REFERENCE_FILENAME"
-  echo "privacy_face_model=$PRIVACY_FACE_MODEL"
-  echo "privacy_lp_model=$PRIVACY_LP_MODEL"
-  echo "privacy_face_conf=$PRIVACY_FACE_CONF"
-  echo "privacy_lp_conf=$PRIVACY_LP_CONF"
-  echo "privacy_output_mode=$PRIVACY_OUTPUT_MODE"
-  echo "privacy_blur_scope=$PRIVACY_BLUR_SCOPE"
-  echo "privacy_blur_backend=$PRIVACY_BLUR_BACKEND"
-  echo "downstream_mode=$DOWNSTREAM_MODE"
-  echo "comfy_stop_containers=$COMFY_STOP_CONTAINERS"
-  echo "stop_after_stage=$STOP_AFTER_STAGE"
-  echo "strict_hardlink=$STRICT_HARDLINK"
-  echo "batch_name=$BATCH_NAME"
-  echo "input_mode_requested=$INPUT_MODE"
   echo "input_mode_resolved=$RESOLVED_INPUT_MODE"
   echo "local_input_dir=$HOST_INPUT_DIR"
   echo "container_input_dir=$CONTAINER_INPUT_DIR"
@@ -763,7 +624,6 @@ TOTAL_SEC=$((END_EPOCH - START_EPOCH))
   if [ -n "$FINAL_OUTPUT_DIR" ] && [ "$STOP_AFTER_STAGE" = "egoblur" ]; then
     echo "final_out_dir=$FINAL_OUTPUT_DIR/$BATCH_NAME"
   fi
-  echo "log_file=$LOG_FILE"
 } | tee "$SUMMARY_FILE"
 
 echo "DONE"

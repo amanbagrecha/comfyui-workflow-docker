@@ -24,7 +24,6 @@ This repository runs a 5-stage 360 panorama pipeline:
 - Each per-GPU `run_full_pipeline.sh` job runs SAM3 masks via `inpainting-workflow-master/$SAM3_SCRIPT` (`sam3_tiled_mask.py` default; supports `archive_sam3_tiled_mask.py`) using transformers-based SAM3 (`Sam3Model`/`Sam3Processor`).
 - Each per-GPU `run_full_pipeline.sh` job runs ComfyUI with `--workflow-json /workspace/workflow.json`.
 - `docker-compose.yml` mounts `/workspace/workflow.json` from `workflow-updated.json` (current content comes from `carremoval-input-to-sky.json`).
-- `docker-compose.yml` still mounts `/workspace/workflow_SAM3_prompt.json` from `workflow_SAM3_prompt.json` for optional/manual workflows.
 - Result: running `run_multi_gpu_pipeline.sh` uses `sam3_tiled_mask.py` CLI defaults and `workflow-updated.json` for ComfyUI inpainting on every shard.
 
 ## One-Command Behavior
@@ -265,7 +264,7 @@ Count-check rule before/after privacy blur:
 - Optional copied final output: `FINAL_OUTPUT_DIR/<batch-name>`
 
 ## SAM3 Tiled Workflow TODOs
-- [ ] Measure average per-image runtime for `workflow_SAM3_prompt.json` and record timings for at least one real batch.
+- [ ] Measure average per-image runtime for `sam3_tiled_mask.py` and record timings for at least one real batch.
 - [ ] Compare resolution choices (`4000x2000` vs `2000x4000`) and decide the default target size based on quality + speed.
 - [ ] Evaluate overlap and edge padding (start with 10 px border pad before SAM3, then unpad) to reduce boundary waviness; document best save settings.
 

@@ -120,10 +120,8 @@ Default values:
 | COMFYUI_DATA_ROOT | ./comfyui_data |
 | MODELS_ROOT | ./models |
 | MODELS_COMFYUI_DIR | ./models/comfyui |
-| MODELS_EGOBLUR_DIR | ./models/egoblur_gen2 (legacy) |
 | MODELS_PRIVACY_DIR | ./models/privacy_blur |
 | POSTPROCESS_WORKERS | 3 |
-| EGOBLUR_WORKERS | 4 (legacy) |
 | PRIVACY_WORKERS | 4 |
 | SAM3_WORKERS | 4 |
 | SAM3_RESIZE_WIDTH | 4000 |
@@ -276,7 +274,6 @@ Default values:
 | Variable | Default |
 |----------|---------|
 | MODELS_COMFYUI_DIR | ./models/comfyui |
-| MODELS_EGOBLUR_DIR | ./models/egoblur_gen2 (legacy) |
 | MODELS_PRIVACY_DIR | ./models/privacy_blur |
 | COMFYUI_DATA_DIR | ./comfyui_data/comfyui-container |
 | COMFY_PORT | 8188 |
@@ -653,7 +650,6 @@ sudo lsof -i :8188
 ### Volume Mounts
 ```yaml
 - ./models/comfyui:/workspace/ComfyUI/models
-- ./models/egoblur_gen2:/workspace/inpainting/models/egoblur_gen2
 - ./models/privacy_blur:/workspace/models/privacy_blur
 - ${COMFYUI_DATA_DIR}/input:/workspace/ComfyUI/input
 - ${COMFYUI_DATA_DIR}/output:/workspace/ComfyUI/output

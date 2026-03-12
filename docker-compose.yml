@@ -10,7 +10,6 @@ services:
       - ${MODELS_COMFYUI_DIR:-./models/comfyui}:/workspace/ComfyUI/models
       # Pipeline scripts mounted from host (no rebuild needed for code tweaks)
       - ./inpainting-workflow-master:/workspace/inpainting
-      - ${MODELS_EGOBLUR_DIR:-./models/egoblur_gen2}:/workspace/inpainting/models/egoblur_gen2:ro
       - ${MODELS_PRIVACY_DIR:-./models/privacy_blur}:/workspace/models/privacy_blur:ro
       # Input/Output for ComfyUI and inpainting pipeline - use container-specific dirs
       - ${COMFYUI_DATA_DIR:-./comfyui_data/comfyui-container}/input:/workspace/ComfyUI/input
@@ -22,7 +21,6 @@ services:
       - ./p2e-local:/workspace/ComfyUI/custom_nodes/p2e
       # Workflow file
       - ./workflow-updated.json:/workspace/workflow.json:ro
-      - ./workflow_SAM3_prompt.json:/workspace/workflow_SAM3_prompt.json:ro
     deploy:
       resources:
         reservations:

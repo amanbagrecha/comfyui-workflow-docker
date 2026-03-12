@@ -42,7 +42,6 @@ PRIVACY_P360_DEVICE="${PRIVACY_P360_DEVICE:-auto}"
 PRIVACY_BLUR_SCOPE="${PRIVACY_BLUR_SCOPE:-roi}"
 PRIVACY_BLUR_BACKEND="${PRIVACY_BLUR_BACKEND:-gpu}"
 PRIVACY_OUTPUT_MODE="${PRIVACY_OUTPUT_MODE:-blur_only}"
-PRIVACY_PYTHON_BIN="${PRIVACY_PYTHON_BIN:-/data/.venv/bin/python}"
 COMFY_IMAGE="${COMFY_IMAGE:-amanbagrecha/container-comfyui:latest}"
 TORCH_CACHE_DIR="${TORCH_CACHE_DIR:-$HOME/.cache/torch}"
 COMFY_READY_TIMEOUT="${COMFY_READY_TIMEOUT:-300}"
@@ -104,7 +103,6 @@ echo "MODELS_PRIVACY_DIR=$MODELS_PRIVACY_DIR"
 echo "PRIVACY_FACE_MODEL=$PRIVACY_FACE_MODEL"
 echo "PRIVACY_LP_MODEL=$PRIVACY_LP_MODEL"
 echo "PRIVACY_OUTPUT_MODE=$PRIVACY_OUTPUT_MODE"
-echo "PRIVACY_PYTHON_BIN=$PRIVACY_PYTHON_BIN"
 echo "TORCH_CACHE_DIR=$TORCH_CACHE_DIR"
 echo "COMFY_READY_TIMEOUT=$COMFY_READY_TIMEOUT"
 echo "COMFY_IMAGE_NODE_ID=$COMFY_IMAGE_NODE_ID"
@@ -199,52 +197,6 @@ if ! command -v wget >/dev/null 2>&1; then
   echo "ERROR: wget is required (used by download-models.sh)."
   exit 1
 fi
-
-ensure_privacy_python_ready() {
-  local py_bin="$PRIVACY_PYTHON_BIN"
-  local uv_bin=""
-  if [[ ! -x "$py_bin" ]]; then
-    if command -v python3 >/dev/null 2>&1; then
-      py_bin="$(command -v python3)"
-    else
-      echo "ERROR: privacy blur requires python interpreter but none was found."
-      return 1
-    fi
-  fi
-  PRIVACY_PYTHON_BIN="$py_bin"
-
-  if command -v uv >/dev/null 2>&1; then
-    uv_bin="$(command -v uv)"
-  else
-    if [[ -f "$HOME/.local/bin/env" ]]; then
-      # shellcheck disable=SC1090
-      . "$HOME/.local/bin/env"
-    fi
-    export PATH="$HOME/.local/bin:$PATH"
-    if command -v uv >/dev/null 2>&1; then
-      uv_bin="$(command -v uv)"
-    else
-      echo "ERROR: privacy blur stage requires 'uv' but it is not available in PATH."
-      echo "Install uv via: curl -LsSf https://astral.sh/uv/install.sh | sh"
-      return 1
-    fi
-  fi
-
-  if "$PRIVACY_PYTHON_BIN" - <<'PY' >/dev/null 2>&1
-import cv2
-import numpy
-import pytorch360convert
-import torch
-import ultralytics
-import open_image_models
-PY
-  then
-    return 0
-  fi
-
-  echo "Installing missing privacy blur Python dependencies into $PRIVACY_PYTHON_BIN"
-  "$uv_bin" pip install --python "$PRIVACY_PYTHON_BIN" "open-image-models[onnx-gpu]" ultralytics pytorch360convert
-}
 
 if ! command -v nvidia-smi >/dev/null 2>&1; then
   echo "ERROR: nvidia-smi not found on host. NVIDIA drivers/GPU are required for this pipeline."
@@ -682,7 +634,7 @@ PY
         -v "$COMFYUI_DATA_DIR/output-postprocessed:/workspace/output-postprocessed"
         -v "$COMFYUI_DATA_DIR/output-egoblur:/workspace/output-egoblur"
       )
-      docker run "${EGO_DOCKER_ARGS[@]}" "$COMFY_IMAGE" \
+      EGO_CMD=(
         python /workspace/inpainting/privacy_blur_infer.py \
         --input-dir   /workspace/output-postprocessed/$BATCH_NAME \
         --output-dir  /workspace/output-egoblur/$BATCH_NAME \
@@ -697,8 +649,12 @@ PY
         --blur-scope  "$PRIVACY_BLUR_SCOPE" \
         --blur-backend "$PRIVACY_BLUR_BACKEND" \
         --output-mode "$PRIVACY_OUTPUT_MODE" \
-        --workers     "$PRIVACY_WORKERS" \
-        --overwrite
+        --workers     "$PRIVACY_WORKERS"
+      )
+      if [ "$FORCE_REPROCESS" = "1" ]; then
+        EGO_CMD+=( --overwrite )
+      fi
+      docker run "${EGO_DOCKER_ARGS[@]}" "$COMFY_IMAGE" "${EGO_CMD[@]}"
 
       E_EGO=$(date +%s)
       EGOBLUR_SEC=$((E_EGO - S_EGO))

@@ -127,7 +127,7 @@
   },
   "20": {
     "inputs": {
-      "prompt": "Fill the masked sky and sun glare region (here in white) with beautiful clear sunny day sky without clouds. Only edit the white masked region. Use image 2 as reference",
+      "prompt": "Fill the masked sky and sun glare region (here in white) with a clear early morning sky around 6 AM, soft natural blue sky without clouds or a visible sun. Only edit the white masked region. Use image 2 as reference",
       "clip": [
         "26",
         0
@@ -242,7 +242,7 @@
   },
   "30": {
     "inputs": {
-      "prompt": "ghost people, vehicle, zoom, offset, clouds, glare, objects, antenna, pole, wire, cable, tower, bird, cloud, contrail, building, reflection, ghosting, extra glare streaks, duplicated structures, horizon changes, geometry distortion",
+      "prompt": "ghost people, vehicle, zoom, offset, clouds, glare, sun, lens flare, bright left edge, bright right edge, bright panorama seam, overexposed edge glow, objects, antenna, pole, wire, cable, tower, bird, contrail, building, reflection, ghosting, extra glare streaks, duplicated structures, horizon changes, geometry distortion",
       "clip": [
         "26",
         0

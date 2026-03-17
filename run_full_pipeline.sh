@@ -20,6 +20,9 @@ SAM3_SCRIPT="${SAM3_SCRIPT:-sam3_tiled_mask.py}"
 LAPLACIAN_DILATION="${LAPLACIAN_DILATION:-1}"
 LAPLACIAN_BLUR="${LAPLACIAN_BLUR:-10}"
 LAPLACIAN_LEVELS="${LAPLACIAN_LEVELS:-7}"
+SEAM_WIDTH="${SEAM_WIDTH:-16}"
+SEAM_FEATHER="${SEAM_FEATHER:-15}"
+SEAM_SIGMA="${SEAM_SIGMA:-1.5}"
 INPUT_MODE="${INPUT_MODE:-auto}"
 FINAL_OUTPUT_DIR="${FINAL_OUTPUT_DIR:-}"
 DOWNSTREAM_MODE="${DOWNSTREAM_MODE:-inline}"
@@ -328,6 +331,9 @@ echo "SAM3_SCRIPT=$SAM3_SCRIPT"
 echo "LAPLACIAN_DILATION=$LAPLACIAN_DILATION"
 echo "LAPLACIAN_BLUR=$LAPLACIAN_BLUR"
 echo "LAPLACIAN_LEVELS=$LAPLACIAN_LEVELS"
+echo "SEAM_WIDTH=$SEAM_WIDTH"
+echo "SEAM_FEATHER=$SEAM_FEATHER"
+echo "SEAM_SIGMA=$SEAM_SIGMA"
 echo "DOWNSTREAM_MODE=$DOWNSTREAM_MODE"
 echo "COMFY_STOP_CONTAINERS=$COMFY_STOP_CONTAINERS"
 echo "STOP_AFTER_STAGE=$STOP_AFTER_STAGE"
@@ -379,6 +385,9 @@ RUN_START_ARGS=(
   --param laplacian_dilation="$LAPLACIAN_DILATION"
   --param laplacian_blur="$LAPLACIAN_BLUR"
   --param laplacian_levels="$LAPLACIAN_LEVELS"
+  --param seam_width="$SEAM_WIDTH"
+  --param seam_feather="$SEAM_FEATHER"
+  --param seam_sigma="$SEAM_SIGMA"
   --param privacy_face_model="$PRIVACY_FACE_MODEL"
   --param privacy_lp_model="$PRIVACY_LP_MODEL"
   --param privacy_output_mode="$PRIVACY_OUTPUT_MODE"
@@ -764,7 +773,7 @@ else
 
     S_POST=$(date +%s)
     if [ "$DOWNSTREAM_MODE" = "inline" ]; then
-      POST_CMD=$(quote_cmd docker exec -u "$(id -u):$(id -g)" -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt "$CONTAINER_NAME" python /workspace/inpainting/postprocess.py -i "/workspace/ComfyUI/output/$BATCH_NAME" -o "/workspace/output-postprocessed/$BATCH_NAME" --top-mask /workspace/inpainting/sky_mask_updated.png --sam3-mask-dir "/workspace/output-sam3-mask/$BATCH_NAME" --dilation "$LAPLACIAN_DILATION" --blur "$LAPLACIAN_BLUR" --levels "$LAPLACIAN_LEVELS" --pattern "*.jpg" -j "$POSTPROCESS_WORKERS")
+      POST_CMD=$(quote_cmd docker exec -u "$(id -u):$(id -g)" -e LAMA_MODEL=/workspace/ComfyUI/models/lama/big-lama.pt "$CONTAINER_NAME" python /workspace/inpainting/postprocess.py -i "/workspace/ComfyUI/output/$BATCH_NAME" -o "/workspace/output-postprocessed/$BATCH_NAME" --top-mask /workspace/inpainting/sky_mask_updated.png --sam3-mask-dir "/workspace/output-sam3-mask/$BATCH_NAME" --dilation "$LAPLACIAN_DILATION" --blur "$LAPLACIAN_BLUR" --levels "$LAPLACIAN_LEVELS" --seam-width "$SEAM_WIDTH" --seam-feather "$SEAM_FEATHER" --mask-sigma "$SEAM_SIGMA" --pattern "*.jpg" -j "$POSTPROCESS_WORKERS")
       start_stage postprocess "$POST_CMD"
       docker exec \
         -u "$(id -u):$(id -g)" \
@@ -778,6 +787,9 @@ else
         --dilation "$LAPLACIAN_DILATION" \
         --blur "$LAPLACIAN_BLUR" \
         --levels "$LAPLACIAN_LEVELS" \
+        --seam-width "$SEAM_WIDTH" \
+        --seam-feather "$SEAM_FEATHER" \
+        --mask-sigma "$SEAM_SIGMA" \
         --pattern "*.jpg" \
         -j "$POSTPROCESS_WORKERS"
     else
@@ -797,7 +809,7 @@ else
       if [ -d "$TORCH_CACHE_DIR" ]; then
         POST_DOCKER_ARGS+=( -v "$TORCH_CACHE_DIR:/root/.cache/torch" )
       fi
-      POST_CMD=$(quote_cmd docker run "${POST_DOCKER_ARGS[@]}" "$COMFY_IMAGE" python /workspace/inpainting/postprocess.py -i "/workspace/ComfyUI/output/$BATCH_NAME" -o "/workspace/output-postprocessed/$BATCH_NAME" --top-mask /workspace/inpainting/sky_mask_updated.png --sam3-mask-dir "/workspace/output-sam3-mask/$BATCH_NAME" --dilation "$LAPLACIAN_DILATION" --blur "$LAPLACIAN_BLUR" --levels "$LAPLACIAN_LEVELS" --pattern "*.jpg" -j "$POSTPROCESS_WORKERS")
+      POST_CMD=$(quote_cmd docker run "${POST_DOCKER_ARGS[@]}" "$COMFY_IMAGE" python /workspace/inpainting/postprocess.py -i "/workspace/ComfyUI/output/$BATCH_NAME" -o "/workspace/output-postprocessed/$BATCH_NAME" --top-mask /workspace/inpainting/sky_mask_updated.png --sam3-mask-dir "/workspace/output-sam3-mask/$BATCH_NAME" --dilation "$LAPLACIAN_DILATION" --blur "$LAPLACIAN_BLUR" --levels "$LAPLACIAN_LEVELS" --seam-width "$SEAM_WIDTH" --seam-feather "$SEAM_FEATHER" --mask-sigma "$SEAM_SIGMA" --pattern "*.jpg" -j "$POSTPROCESS_WORKERS")
       start_stage postprocess "$POST_CMD"
       docker run "${POST_DOCKER_ARGS[@]}" "$COMFY_IMAGE" \
         python /workspace/inpainting/postprocess.py \
@@ -808,6 +820,9 @@ else
         --dilation "$LAPLACIAN_DILATION" \
         --blur "$LAPLACIAN_BLUR" \
         --levels "$LAPLACIAN_LEVELS" \
+        --seam-width "$SEAM_WIDTH" \
+        --seam-feather "$SEAM_FEATHER" \
+        --mask-sigma "$SEAM_SIGMA" \
         --pattern "*.jpg" \
         -j "$POSTPROCESS_WORKERS"
     fi

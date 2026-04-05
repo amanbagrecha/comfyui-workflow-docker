@@ -15,7 +15,6 @@ MODELS_ROOT="${MODELS_ROOT:-$REPO/models}"
 MODELS_COMFYUI_DIR="${MODELS_COMFYUI_DIR:-$MODELS_ROOT/comfyui}"
 MODELS_PRIVACY_DIR="${MODELS_PRIVACY_DIR:-$MODELS_ROOT/privacy_blur}"
 P2E_LIB_DIR="${P2E_LIB_DIR:-$REPO/p2e-lib}"
-TORCH_REQS="$REPO/requirements/torch-bootstrap.txt"
 COMFY_CORE_REQS="$REPO/requirements/comfyui-core.txt"
 INSTALL_SYSTEM_PACKAGES="${INSTALL_SYSTEM_PACKAGES:-1}"
 DOWNLOAD_MODELS="${DOWNLOAD_MODELS:-1}"
@@ -47,12 +46,18 @@ install_system_packages() {
   fi
 
   run_privileged apt-get update
+
+  local os_pkg="libgl1-mesa-glx"
+  if grep -q "Noble\|24.04" /etc/os-release 2>/dev/null; then
+    os_pkg="libgl1"
+  fi
+
   run_privileged apt-get install -y \
     git \
     curl \
     wget \
     build-essential \
-    libgl1-mesa-glx \
+    "$os_pkg" \
     libglib2.0-0 \
     tmux
 }
@@ -116,8 +121,6 @@ clone_or_checkout https://github.com/comfyanonymous/ComfyUI "$COMFYUI_HOME" "$CO
 clone_or_checkout https://github.com/ltdrdata/ComfyUI-Manager "$COMFYUI_HOME/custom_nodes/ComfyUI-Manager" "$COMFYUI_MANAGER_COMMIT"
 uv pip install --python "$PYTHON_BIN" -r "$COMFYUI_HOME/custom_nodes/ComfyUI-Manager/requirements.txt"
 
-uv pip install --python "$PYTHON_BIN" -r "$TORCH_REQS"
-
 uv pip install --python "$PYTHON_BIN" -r "$COMFY_CORE_REQS"
 
 COMFYUI_PATH="$COMFYUI_HOME" "$PYTHON_BIN" "$CM_CLI" restore-snapshot \
@@ -132,13 +135,17 @@ enable_custom_node was-node-suite-comfyui
 
 clone_or_checkout https://github.com/amanbagrecha/p2e.git "$P2E_LIB_DIR" "$P2E_COMMIT"
 
-uv pip install --python "$PYTHON_BIN" -r "$REPO/pipeline-requirements.txt"
+uv pip install --python "$PYTHON_BIN" \
+  --reinstall-package torch \
+  --reinstall-package torchvision \
+  --reinstall-package torchaudio \
+  --reinstall-package triton \
+  --reinstall-package opencv-contrib-python \
+  -r "$REPO/pipeline-requirements.txt"
 uv pip install --python "$PYTHON_BIN" --no-deps \
   simple-lama-inpainting==0.1.0 \
   ultralytics==8.4.21 \
   open-image-models==0.5.1
-uv pip uninstall --python "$PYTHON_BIN" opencv-python opencv-python-headless || true
-uv pip install --python "$PYTHON_BIN" --no-deps opencv-contrib-python==4.12.0.88
 
 link_path "$MODELS_COMFYUI_DIR" "$COMFYUI_HOME/models"
 link_path "$REPO/p2e-local" "$COMFYUI_HOME/custom_nodes/p2e"

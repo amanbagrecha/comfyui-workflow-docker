@@ -11,8 +11,8 @@ import requests
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
-COMFY_INPUT_ROOT = Path("/workspace/ComfyUI/input")
-COMFY_OUTPUT_ROOT = Path("/workspace/ComfyUI/output")
+DEFAULT_COMFY_INPUT_ROOT = Path("/workspace/ComfyUI/input")
+DEFAULT_COMFY_OUTPUT_ROOT = Path("/workspace/ComfyUI/output")
 IMAGE_NODE_TYPES = {"LoadImage", "Image Load"}
 MASK_NODE_TYPES = {"LoadImage", "LoadImageMask", "Image Load"}
 SAVE_NODE_SUFFIX_BY_ID = {
@@ -86,6 +86,18 @@ def timer(func):
 )
 @click.option("--poll-s", default=1.0, show_default=True)
 @click.option("--timeout-s", default=1800, show_default=True)
+@click.option(
+    "--comfy-input-root",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=DEFAULT_COMFY_INPUT_ROOT,
+    show_default=True,
+)
+@click.option(
+    "--comfy-output-root",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=DEFAULT_COMFY_OUTPUT_ROOT,
+    show_default=True,
+)
 def main(
     workflow_json: Path,
     input_dir: Path,
@@ -100,6 +112,8 @@ def main(
     sam3_mask_node_id: str,
     poll_s: float,
     timeout_s: int,
+    comfy_input_root: Path,
+    comfy_output_root: Path,
 ):
     """Batch-run a ComfyUI workflow via HTTP API.
 
@@ -113,6 +127,8 @@ def main(
 
     server = server.rstrip("/")
     input_dir = input_dir.resolve()
+    comfy_input_root = comfy_input_root.resolve()
+    comfy_output_root = comfy_output_root.resolve()
     mask_path = mask_path.resolve()
     sam3_mask_dir = sam3_mask_dir.resolve() if sam3_mask_dir else None
     output_dir = output_dir.resolve()
@@ -124,10 +140,10 @@ def main(
         )
 
     try:
-        output_subdir = output_dir.relative_to(COMFY_OUTPUT_ROOT).as_posix()
+        output_subdir = output_dir.relative_to(comfy_output_root).as_posix()
     except ValueError as exc:
         raise click.ClickException(
-            f"--output-dir must be inside {COMFY_OUTPUT_ROOT}: {output_dir}"
+            f"--output-dir must be inside {comfy_output_root}: {output_dir}"
         ) from exc
     output_path_value = output_subdir if output_subdir else "."
 
@@ -192,10 +208,10 @@ def main(
 
     def _to_comfy_input_name(local_path: Path) -> str:
         try:
-            return local_path.resolve().relative_to(COMFY_INPUT_ROOT).as_posix()
+            return local_path.resolve().relative_to(comfy_input_root).as_posix()
         except ValueError as exc:
             raise click.ClickException(
-                f"Path must be inside {COMFY_INPUT_ROOT}: {local_path}"
+                f"Path must be inside {comfy_input_root}: {local_path}"
             ) from exc
 
     def _set_image_path(

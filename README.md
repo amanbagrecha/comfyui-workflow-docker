@@ -3,6 +3,7 @@
 Complete Docker-based pipeline for 360° image inpainting with SAM3 segmentation, perspective transformation, and privacy blurring (faces & license plates).
 
 ## Table of Contents
+- [Native (No-Docker) Migration](#native-no-docker-migration)
 - [Prerequisites](#prerequisites)
 - [Required Files & Directory Structure](#required-files--directory-structure)
 - [Setup Instructions](#setup-instructions)
@@ -12,6 +13,30 @@ Complete Docker-based pipeline for 360° image inpainting with SAM3 segmentation
 - [Monitoring & Troubleshooting](#monitoring--troubleshooting)
 
 ---
+
+
+## Native (No-Docker) Migration
+
+If you want to run this pipeline directly on the host without Docker, use the new native entrypoints and migration plan:
+
+- Migration plan: `docs/native-no-docker-migration.md`
+- Native orchestrator: `run_multi_gpu_pipeline_native.sh`
+- Native per-GPU runner: `run_full_pipeline_native.sh`
+
+Native mode assumes:
+
+- Local ComfyUI checkout available via `COMFYUI_HOME` (default: `./ComfyUI`)
+- Local ComfyUI API server already running per GPU/port
+- Models present under `models/comfyui` and `models/privacy_blur`
+
+Example:
+
+```bash
+SRC="/absolute/path/to/input_images" \
+FINAL_OUTPUT_DIR="/absolute/path/to/final_outputs" \
+GPU_IDS="0,1,2,3" \
+./run_multi_gpu_pipeline_native.sh
+```
 
 ## Prerequisites
 

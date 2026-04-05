@@ -5,15 +5,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${REPO:-$SCRIPT_DIR}"
 # shellcheck disable=SC1091
 . "$REPO/scripts/runtime.sh"
+# shellcheck disable=SC1091
+. "$REPO/scripts/shell_helpers.sh"
 
 ensure_uv
 
-VENV_DIR="$REPO/.venv"
 COMFYUI_HOME="${COMFYUI_HOME:-$REPO/ComfyUI}"
 MODELS_ROOT="${MODELS_ROOT:-$REPO/models}"
 MODELS_COMFYUI_DIR="${MODELS_COMFYUI_DIR:-$MODELS_ROOT/comfyui}"
 MODELS_PRIVACY_DIR="${MODELS_PRIVACY_DIR:-$MODELS_ROOT/privacy_blur}"
 P2E_LIB_DIR="${P2E_LIB_DIR:-$REPO/p2e-lib}"
+TORCH_REQS="$REPO/requirements/torch-bootstrap.txt"
+COMFY_CORE_REQS="$REPO/requirements/comfyui-core.txt"
 INSTALL_SYSTEM_PACKAGES="${INSTALL_SYSTEM_PACKAGES:-1}"
 DOWNLOAD_MODELS="${DOWNLOAD_MODELS:-1}"
 FORCE_LINKS="${FORCE_LINKS:-1}"
@@ -89,14 +92,18 @@ link_path() {
   ln -s "$src" "$dest"
 }
 
-install_system_packages
+enable_custom_node() {
+  local name="$1"
+  local active_dir="$COMFYUI_HOME/custom_nodes/$name"
+  local disabled_dir="$COMFYUI_HOME/custom_nodes/.disabled/$name"
 
-for cmd in git; do
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    echo "ERROR: required command not found: $cmd"
-    exit 1
+  if [ -d "$disabled_dir" ] && [ ! -e "$active_dir" ]; then
+    mv "$disabled_dir" "$active_dir"
   fi
-done
+}
+
+install_system_packages
+require_commands git
 
 mkdir -p "$MODELS_COMFYUI_DIR" "$MODELS_PRIVACY_DIR"
 
@@ -104,55 +111,12 @@ ensure_repo_python
 CM_CLI="$COMFYUI_HOME/custom_nodes/ComfyUI-Manager/cm-cli.py"
 
 uv pip install --python "$PYTHON_BIN" pip
-uv pip install --python "$PYTHON_BIN" comfy-cli
 
 clone_or_checkout https://github.com/comfyanonymous/ComfyUI "$COMFYUI_HOME" "$COMFYUI_COMMIT"
 clone_or_checkout https://github.com/ltdrdata/ComfyUI-Manager "$COMFYUI_HOME/custom_nodes/ComfyUI-Manager" "$COMFYUI_MANAGER_COMMIT"
 uv pip install --python "$PYTHON_BIN" -r "$COMFYUI_HOME/custom_nodes/ComfyUI-Manager/requirements.txt"
 
-TORCH_REQS=$(mktemp)
-COMFY_CORE_REQS=$(mktemp)
-cleanup_tmp() {
-  rm -f "$TORCH_REQS" "$COMFY_CORE_REQS"
-}
-trap cleanup_tmp EXIT
-
-"$PYTHON_BIN" - "$REPO/pipeline-requirements.txt" "$TORCH_REQS" <<'PY'
-from pathlib import Path
-import sys
-
-src = Path(sys.argv[1])
-dst = Path(sys.argv[2])
-keep = []
-for raw in src.read_text().splitlines():
-    line = raw.strip()
-    if not line or line.startswith('#'):
-        continue
-    if line.startswith('--extra-index-url') or line.startswith('torch==') or line.startswith('torchvision==') or line.startswith('torchaudio=='):
-        keep.append(line)
-dst.write_text('\n'.join(keep) + '\n')
-PY
-
 uv pip install --python "$PYTHON_BIN" -r "$TORCH_REQS"
-
-"$PYTHON_BIN" - "$COMFYUI_HOME/requirements.txt" "$COMFY_CORE_REQS" <<'PY'
-from pathlib import Path
-import sys
-
-src = Path(sys.argv[1])
-dst = Path(sys.argv[2])
-skip = {'torch', 'torchaudio', 'torchvision'}
-keep = []
-for raw in src.read_text().splitlines():
-    line = raw.strip()
-    if not line or line.startswith('#'):
-        continue
-    name = line.split('==', 1)[0].split('>=', 1)[0].split('~=', 1)[0].strip().lower()
-    if name in skip:
-        continue
-    keep.append(line)
-dst.write_text('\n'.join(keep) + '\n')
-PY
 
 uv pip install --python "$PYTHON_BIN" -r "$COMFY_CORE_REQS"
 
@@ -160,6 +124,11 @@ COMFYUI_PATH="$COMFYUI_HOME" "$PYTHON_BIN" "$CM_CLI" restore-snapshot \
   "$REPO/Comfy-Lock.yaml" \
   --pip-non-url \
   --pip-non-local-url
+
+enable_custom_node comfyui_essentials
+enable_custom_node comfyui-pytorch360convert
+enable_custom_node comfyui_layerstyle
+enable_custom_node was-node-suite-comfyui
 
 clone_or_checkout https://github.com/amanbagrecha/p2e.git "$P2E_LIB_DIR" "$P2E_COMMIT"
 

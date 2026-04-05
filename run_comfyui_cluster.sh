@@ -6,6 +6,8 @@ REPO="${REPO:-$SCRIPT_DIR}"
 PIPELINE_HELPERS="$REPO/inpainting-workflow-master/pipeline_helpers.py"
 # shellcheck disable=SC1091
 . "$REPO/scripts/runtime.sh"
+# shellcheck disable=SC1091
+. "$REPO/scripts/shell_helpers.sh"
 
 require_repo_python
 
@@ -26,26 +28,12 @@ HEALTH_POLL="${HEALTH_POLL:-1}"
 
 mkdir -p "$WORK_ROOT/jobs"
 
-for cmd in tmux nvidia-smi; do
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    echo "ERROR: required command not found: $cmd"
-    exit 1
-  fi
-done
+require_commands tmux nvidia-smi
 
 if [ ! -d "$COMFYUI_HOME" ]; then
   echo "ERROR: COMFYUI_HOME not found: $COMFYUI_HOME"
   exit 1
 fi
-
-resolve_gpu_ids() {
-  local raw="$1"
-  if [[ "$raw" != "auto" ]]; then
-    tr ', ' '\n\n' <<<"$raw" | awk 'NF'
-    return
-  fi
-  nvidia-smi --query-gpu=index --format=csv,noheader | tr -d ' ' | awk 'NF'
-}
 
 mapfile -t GPU_LIST < <(resolve_gpu_ids "$GPU_IDS_RAW")
 if [[ ${#GPU_LIST[@]} -eq 0 ]]; then

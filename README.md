@@ -13,7 +13,7 @@ This repository no longer uses Docker. The full workflow runs directly on the ho
 ## Overview
 
 `run_multi_gpu_pipeline.sh` is the main command.
-It bootstraps a `uv`-managed Python `3.12` environment, downloads missing models, runs inpainting, stops ComfyUI to free VRAM, and finishes the remaining stages.
+It bootstraps a `uv`-managed Python `3.10` environment, downloads missing models, runs inpainting, stops ComfyUI to free VRAM, and finishes the remaining stages.
 
 ## Requirements
 

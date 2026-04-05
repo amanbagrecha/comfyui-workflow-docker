@@ -34,6 +34,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${REPO:-$SCRIPT_DIR}"
 # shellcheck disable=SC1091
 . "$REPO/scripts/runtime.sh"
+# shellcheck disable=SC1091
+. "$REPO/scripts/shell_helpers.sh"
 
 ensure_uv
 ensure_repo_python
@@ -70,7 +72,7 @@ LOG_FILE="$LOG_DIR/multigpu_${RUN_NAME}.log"
 EVENTS_FILE="$LOG_DIR/multigpu_${RUN_NAME}.events.jsonl"
 mkdir -p "$LOG_DIR" "$WORK_ROOT/shards" "$WORK_ROOT/jobs"
 
-exec > >(while IFS= read -r line; do printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$line"; done | tee -a "$LOG_FILE") 2>&1
+setup_timestamped_log "$LOG_FILE"
 
 START_EPOCH=$(date +%s)
 END_EPOCH=0
@@ -206,32 +208,11 @@ on_exit() {
 trap 'on_error $? $LINENO "$BASH_COMMAND"' ERR
 trap 'on_exit $?' EXIT
 
-if [[ "$MAX_GPUS" =~ [^0-9] ]]; then
-  echo "ERROR: MAX_GPUS must be a non-negative integer"
-  exit 1
-fi
-
-if [[ "$WAIT_POLL_SEC" =~ [^0-9] || "$WAIT_POLL_SEC" -lt 1 ]]; then
-  echo "ERROR: WAIT_POLL_SEC must be an integer >= 1"
-  exit 1
-fi
-
-if [[ "$STRICT_HARDLINK" != "0" && "$STRICT_HARDLINK" != "1" ]]; then
-  echo "ERROR: STRICT_HARDLINK must be 0 or 1"
-  exit 1
-fi
-
-if [[ "$DRY_RUN" != "0" && "$DRY_RUN" != "1" ]]; then
-  echo "ERROR: DRY_RUN must be 0 or 1"
-  exit 1
-fi
-
-for cmd in nvidia-smi tmux wget; do
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    echo "ERROR: required command not found: $cmd"
-    exit 1
-  fi
-done
+validate_non_negative_int MAX_GPUS "$MAX_GPUS"
+validate_min_int WAIT_POLL_SEC "$WAIT_POLL_SEC" 1
+validate_flag STRICT_HARDLINK "$STRICT_HARDLINK"
+validate_flag DRY_RUN "$DRY_RUN"
+require_commands nvidia-smi tmux wget
 
 RUN_FULL="$REPO/run_full_pipeline.sh"
 if [[ ! -x "$RUN_FULL" ]]; then
@@ -244,15 +225,6 @@ if [[ ! -x "$RUN_BOOTSTRAP" ]]; then
   echo "ERROR: setup_host_environment.sh not found or not executable at $RUN_BOOTSTRAP"
   exit 1
 fi
-
-resolve_gpu_ids() {
-  local raw="$1"
-  if [[ "$raw" != "auto" ]]; then
-    tr ', ' '\n\n' <<<"$raw" | awk 'NF'
-    return
-  fi
-  nvidia-smi --query-gpu=index --format=csv,noheader | tr -d ' ' | awk 'NF'
-}
 
 mapfile -t GPU_LIST < <(resolve_gpu_ids "$GPU_IDS_RAW")
 if [[ ${#GPU_LIST[@]} -eq 0 ]]; then
@@ -286,18 +258,8 @@ log_event \
   --path manifest_json="$MANIFEST_JSON" \
   --path count_json="$COUNT_JSON"
 
-echo "RUN_NAME=$RUN_NAME"
-echo "SRC=$SRC"
-echo "NUM_GPUS=$NUM_GPUS"
-echo "GPU_IDS=${GPU_LIST[*]}"
-echo "COMFYUI_HOME=$COMFYUI_HOME"
-echo "NATIVE_DATA_ROOT=$NATIVE_DATA_ROOT"
-echo "WORK_ROOT=$WORK_ROOT"
-echo "LOG_FILE=$LOG_FILE"
-echo "EVENTS_FILE=$EVENTS_FILE"
-echo "STOP_AFTER_STAGE=$STOP_AFTER_STAGE"
-echo "STRICT_HARDLINK=$STRICT_HARDLINK"
-echo "DRY_RUN=$DRY_RUN"
+echo "RUN_NAME=$RUN_NAME SRC=$SRC GPU_IDS=${GPU_LIST[*]}"
+echo "WORK_ROOT=$WORK_ROOT STOP_AFTER_STAGE=$STOP_AFTER_STAGE DRY_RUN=$DRY_RUN"
 
 if [[ "$DRY_RUN" == "0" ]]; then
   set_step bootstrap_host
@@ -334,23 +296,13 @@ if [[ "$DRY_RUN" == "0" ]]; then
   _models_root="${MODELS_ROOT:-$REPO/models}"
   _models_comfyui="${MODELS_COMFYUI_DIR:-$_models_root/comfyui}"
   _models_privacy="${MODELS_PRIVACY_DIR:-$_models_root/privacy_blur}"
-  _required_models=(
-    "$_models_comfyui/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"
-    "$_models_comfyui/vae/qwen_image_vae.safetensors"
-    "$_models_comfyui/loras/Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors"
-    "$_models_comfyui/upscale_models/RealESRGAN_x2plus.pth"
-    "$_models_comfyui/diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors"
-    "$_models_comfyui/sam3/model.safetensors"
-    "$_models_comfyui/sam3/config.json"
-    "$_models_comfyui/sam3/processor_config.json"
-    "$_models_comfyui/sam3/special_tokens_map.json"
-    "$_models_comfyui/sam3/tokenizer.json"
-    "$_models_comfyui/sam3/tokenizer_config.json"
-    "$_models_comfyui/sam3/vocab.json"
-    "$_models_comfyui/sam3/merges.txt"
-    "$_models_comfyui/lama/big-lama.pt"
-    "$_models_privacy/face_yolov8n.pt"
-    "$_models_privacy/yolo-v9-s-608-license-plates-end2end.onnx"
+  mapfile -t _required_models < <(
+    required_model_paths \
+      "$_models_comfyui" \
+      "$_models_privacy" \
+      "$_models_comfyui/lama/big-lama.pt" \
+      "$_models_privacy/face_yolov8n.pt" \
+      "$_models_privacy/yolo-v9-s-608-license-plates-end2end.onnx"
   )
   _need_download=0
   for _m in "${_required_models[@]}"; do
@@ -503,6 +455,12 @@ EOF
 done
 clear_step
 
+final_stage_dir() {
+  local data_dir="$1"
+  local batch="$2"
+  stage_output_dir "$data_dir" "$batch" "$STOP_AFTER_STAGE"
+}
+
 if [[ "$DRY_RUN" == "1" ]]; then
   echo "Dry run complete. Launch plan: $LAUNCH_PLAN"
   exit 0
@@ -541,15 +499,7 @@ while IFS=$'\t' read -r gpu_id idx batch comfy_data_dir _ _ rc_file child_run_id
 
   in_count=$("$PYTHON_BIN" "$PIPELINE_HELPERS" count-images --path "$WORK_ROOT/shards/gpu${idx}" --include-bmp)
 
-  if [[ "$STOP_AFTER_STAGE" == "egoblur" ]]; then
-    out_dir="$comfy_data_dir/output-egoblur/$batch"
-  elif [[ "$STOP_AFTER_STAGE" == "sam3" ]]; then
-    out_dir="$comfy_data_dir/output-sam3-mask/$batch"
-  elif [[ "$STOP_AFTER_STAGE" == "postprocess" ]]; then
-    out_dir="$comfy_data_dir/output-postprocessed/$batch"
-  else
-    out_dir="$comfy_data_dir/output/$batch"
-  fi
+  out_dir="$(final_stage_dir "$comfy_data_dir" "$batch")"
 
   out_count=$("$PYTHON_BIN" "$PIPELINE_HELPERS" count-images --path "$out_dir" --include-bmp)
 
@@ -599,15 +549,7 @@ if [[ -n "${FINAL_OUTPUT_DIR:-}" ]]; then
   set_step merge_outputs
 
   while IFS=$'\t' read -r gpu_id _ batch comfy_data_dir _ _ _ _ _ _; do
-    if [[ "$STOP_AFTER_STAGE" == "egoblur" ]]; then
-      src_dir="$comfy_data_dir/output-egoblur/$batch"
-    elif [[ "$STOP_AFTER_STAGE" == "sam3" ]]; then
-      src_dir="$comfy_data_dir/output-sam3-mask/$batch"
-    elif [[ "$STOP_AFTER_STAGE" == "postprocess" ]]; then
-      src_dir="$comfy_data_dir/output-postprocessed/$batch"
-    else
-      src_dir="$comfy_data_dir/output/$batch"
-    fi
+    src_dir="$(final_stage_dir "$comfy_data_dir" "$batch")"
     dst_dir="$MERGED_ROOT/gpu${gpu_id}"
     mkdir -p "$dst_dir"
 

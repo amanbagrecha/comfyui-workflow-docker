@@ -64,7 +64,7 @@ FINAL_OUTPUT_DIR="/absolute/path/to/final_outputs" \
 ./run_multi_gpu_pipeline.sh
 ```
 
-`run_multi_gpu_pipeline.sh` bootstraps a `uv`-managed Python `3.12` environment, downloads missing models, runs one shard per GPU, starts ComfyUI only for inpainting, stops it after inpainting, and merges final outputs.
+`run_multi_gpu_pipeline.sh` bootstraps a `uv`-managed Python `3.10` environment, downloads missing models, runs one shard per GPU, starts ComfyUI only for inpainting, stops it after inpainting, and merges final outputs.
 
 ## Internal Bootstrap Helper
 

@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${REPO:-$SCRIPT_DIR}"
 # shellcheck disable=SC1091
 . "$REPO/scripts/runtime.sh"
+# shellcheck disable=SC1091
+. "$REPO/scripts/shell_helpers.sh"
 
 require_repo_python
 
@@ -19,10 +21,8 @@ COMFY_OUTPUT_ROOT="${COMFY_OUTPUT_ROOT:-$COMFY_DATA_DIR/output}"
 COMFY_TEMP_PARENT="${COMFY_TEMP_PARENT:-$COMFY_DATA_DIR}"
 
 LOG_DIR="$REPO/logs"
-mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/comfyui_g${GPU_ID}.log"
-
-exec > >(while IFS= read -r line; do printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$line"; done | tee -a "$LOG_FILE") 2>&1
+setup_timestamped_log "$LOG_FILE"
 
 if [ ! -d "$COMFYUI_HOME" ]; then
   echo "ERROR: COMFYUI_HOME not found: $COMFYUI_HOME"

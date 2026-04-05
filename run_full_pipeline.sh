@@ -6,6 +6,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${REPO:-$SCRIPT_DIR}"
 # shellcheck disable=SC1091
 . "$REPO/scripts/runtime.sh"
+# shellcheck disable=SC1091
+. "$REPO/scripts/shell_helpers.sh"
 
 require_repo_python
 
@@ -73,11 +75,10 @@ LAMA_MODEL="${LAMA_MODEL:-$MODELS_COMFYUI_DIR/lama/big-lama.pt}"
 PIPELINE_HELPERS="$REPO/inpainting-workflow-master/pipeline_helpers.py"
 
 LOG_DIR="$REPO/logs"
-mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/fullrun_${RUN_ID}.log"
 EVENTS_FILE="$LOG_DIR/fullrun_${RUN_ID}.events.jsonl"
 
-exec > >(while IFS= read -r line; do printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$line"; done | tee -a "$LOG_FILE") 2>&1
+setup_timestamped_log "$LOG_FILE"
 
 START_EPOCH=$(date +%s)
 END_EPOCH=0
@@ -355,35 +356,15 @@ if [ ! -d "$SRC" ]; then
   exit 1
 fi
 
-if [[ "$STRICT_HARDLINK" != "0" && "$STRICT_HARDLINK" != "1" ]]; then
-  echo "ERROR: STRICT_HARDLINK must be 0 or 1"
-  exit 1
-fi
-
-if [[ "$FORCE_REPROCESS" != "0" && "$FORCE_REPROCESS" != "1" ]]; then
-  echo "ERROR: FORCE_REPROCESS must be 0 or 1"
-  exit 1
-fi
+validate_flag STRICT_HARDLINK "$STRICT_HARDLINK"
+validate_flag FORCE_REPROCESS "$FORCE_REPROCESS"
 
 if [[ "$STOP_AFTER_STAGE" != "sam3" && "$STOP_AFTER_STAGE" != "inpainting" && "$STOP_AFTER_STAGE" != "postprocess" && "$STOP_AFTER_STAGE" != "egoblur" ]]; then
   echo "ERROR: Invalid STOP_AFTER_STAGE=$STOP_AFTER_STAGE (expected: sam3|inpainting|postprocess|egoblur)"
   exit 1
 fi
 
-if ! command -v nvidia-smi >/dev/null 2>&1; then
-  echo "ERROR: nvidia-smi not found on host. NVIDIA drivers/GPU are required for this pipeline."
-  exit 1
-fi
-
-if ! command -v wget >/dev/null 2>&1; then
-  echo "ERROR: wget is required (used by download-models.sh)."
-  exit 1
-fi
-
-if ! command -v tmux >/dev/null 2>&1; then
-  echo "ERROR: tmux is required to start/stop ComfyUI services."
-  exit 1
-fi
+require_commands nvidia-smi wget tmux
 
 if [ ! -d "$COMFYUI_HOME" ]; then
   echo "ERROR: COMFYUI_HOME not found: $COMFYUI_HOME"
@@ -405,53 +386,9 @@ if [ ! -f "$REPO/inpainting-workflow-master/perspective_mask.png" ]; then
   exit 1
 fi
 
-echo "RUN_ID=$RUN_ID"
-echo "LOG_FILE=$LOG_FILE"
-echo "EVENTS_FILE=$EVENTS_FILE"
-echo "REPO=$REPO"
-echo "SRC=$SRC"
-echo "BATCH_NAME=$BATCH_NAME"
-echo "GPU_ID=$GPU_ID"
-echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
-echo "COMFYUI_HOME=$COMFYUI_HOME"
-echo "COMFY_PORT=$COMFY_PORT"
-echo "COMFY_SERVER=$COMFY_SERVER"
-echo "COMFY_SESSION_NAME=$COMFY_SESSION_NAME"
-echo "COMFY_INPUT_ROOT=$COMFY_INPUT_ROOT"
-echo "COMFY_OUTPUT_ROOT=$COMFY_OUTPUT_ROOT"
-echo "COMFY_DATA_DIR=$COMFY_DATA_DIR"
-echo "MODELS_COMFYUI_DIR=$MODELS_COMFYUI_DIR"
-echo "MODELS_PRIVACY_DIR=$MODELS_PRIVACY_DIR"
-echo "FORCE_REPROCESS=$FORCE_REPROCESS"
-echo "STRICT_HARDLINK=$STRICT_HARDLINK"
-echo "POSTPROCESS_WORKERS=$POSTPROCESS_WORKERS"
-echo "PRIVACY_WORKERS=$PRIVACY_WORKERS"
-echo "SAM3_WORKERS=$SAM3_WORKERS"
-echo "SAM3_RESIZE_WIDTH=$SAM3_RESIZE_WIDTH"
-echo "SAM3_RESIZE_HEIGHT=$SAM3_RESIZE_HEIGHT"
-echo "SAM3_GLARE_THRESHOLD=$SAM3_GLARE_THRESHOLD"
-echo "SAM3_TILE_ROWS=$SAM3_TILE_ROWS"
-echo "SAM3_TILE_COLS=$SAM3_TILE_COLS"
-echo "SAM3_SCRIPT=$SAM3_SCRIPT"
-echo "LAPLACIAN_DILATION=$LAPLACIAN_DILATION"
-echo "LAPLACIAN_BLUR=$LAPLACIAN_BLUR"
-echo "LAPLACIAN_LEVELS=$LAPLACIAN_LEVELS"
-echo "SEAM_WIDTH=$SEAM_WIDTH"
-echo "SEAM_FEATHER=$SEAM_FEATHER"
-echo "SEAM_SIGMA=$SEAM_SIGMA"
-echo "STOP_AFTER_STAGE=$STOP_AFTER_STAGE"
-echo "PRIVACY_FACE_MODEL=$PRIVACY_FACE_MODEL"
-echo "PRIVACY_LP_MODEL=$PRIVACY_LP_MODEL"
-echo "PRIVACY_OUTPUT_MODE=$PRIVACY_OUTPUT_MODE"
-echo "COMFY_IMAGE_NODE_ID=$COMFY_IMAGE_NODE_ID"
-echo "COMFY_MASK_NODE_ID=$COMFY_MASK_NODE_ID"
-echo "COMFY_SAM3_MASK_NODE_ID=$COMFY_SAM3_MASK_NODE_ID"
-echo "SKY_REFERENCE_SOURCE=$SKY_REFERENCE_SOURCE"
-echo "SKY_REFERENCE_FILENAME=$SKY_REFERENCE_FILENAME"
-echo "LAMA_MODEL=$LAMA_MODEL"
-if [ -n "$FINAL_OUTPUT_DIR" ]; then
-  echo "FINAL_OUTPUT_DIR=$FINAL_OUTPUT_DIR"
-fi
+echo "RUN_ID=$RUN_ID GPU_ID=$GPU_ID BATCH_NAME=$BATCH_NAME"
+echo "SRC=$SRC COMFY_SERVER=$COMFY_SERVER STOP_AFTER_STAGE=$STOP_AFTER_STAGE"
+echo "MODELS_COMFYUI_DIR=$MODELS_COMFYUI_DIR MODELS_PRIVACY_DIR=$MODELS_PRIVACY_DIR"
 
 mkdir -p \
   "$COMFY_INPUT_ROOT" \
@@ -510,23 +447,13 @@ fi
 log_event "${RUN_START_ARGS[@]}"
 
 if [ "${SKIP_PREFLIGHT:-0}" != "1" ]; then
-  required_files=(
-    "$MODELS_COMFYUI_DIR/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors"
-    "$MODELS_COMFYUI_DIR/vae/qwen_image_vae.safetensors"
-    "$MODELS_COMFYUI_DIR/loras/Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors"
-    "$MODELS_COMFYUI_DIR/upscale_models/RealESRGAN_x2plus.pth"
-    "$MODELS_COMFYUI_DIR/diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors"
-    "$MODELS_COMFYUI_DIR/sam3/model.safetensors"
-    "$MODELS_COMFYUI_DIR/sam3/config.json"
-    "$MODELS_COMFYUI_DIR/sam3/processor_config.json"
-    "$MODELS_COMFYUI_DIR/sam3/special_tokens_map.json"
-    "$MODELS_COMFYUI_DIR/sam3/tokenizer.json"
-    "$MODELS_COMFYUI_DIR/sam3/tokenizer_config.json"
-    "$MODELS_COMFYUI_DIR/sam3/vocab.json"
-    "$MODELS_COMFYUI_DIR/sam3/merges.txt"
-    "$LAMA_MODEL"
-    "$PRIVACY_FACE_MODEL"
-    "$PRIVACY_LP_MODEL"
+  mapfile -t required_files < <(
+    required_model_paths \
+      "$MODELS_COMFYUI_DIR" \
+      "$MODELS_PRIVACY_DIR" \
+      "$LAMA_MODEL" \
+      "$PRIVACY_FACE_MODEL" \
+      "$PRIVACY_LP_MODEL"
   )
 
   need_download=0

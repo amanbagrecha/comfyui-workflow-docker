@@ -70,7 +70,9 @@ FINAL_OUTPUT_DIR="/absolute/path/to/final_outputs" \
 
 `setup_host_environment.sh` still exists, but it is an internal helper used by `run_multi_gpu_pipeline.sh`.
 
-It installs `uv`, creates `.venv`, pins `ComfyUI`, restores `Comfy-Lock.yaml`, installs dependencies, links the model paths, and downloads missing models.
+It installs `uv`, creates `.venv` (Python 3.10), clones ComfyUI and ComfyUI-Manager at pinned commits, uses cm-cli to git-clone custom nodes from `Comfy-Lock.yaml` (pip installs are skipped — cm-cli is called without any `--pip-*` flags), then runs a single `uv sync` against `pyproject.toml` to install all Python dependencies in one step. Finally it links the model paths and downloads missing models.
+
+All pip dependencies live exclusively in `pyproject.toml` + `uv.lock`. The old `pipeline-requirements.txt` and `requirements/comfyui-core.txt` files have been removed.
 
 ## Internal ComfyUI Helper
 
@@ -140,8 +142,9 @@ BATCH_NAME="debug-g0" \
 
 ## Remaining Risk Areas
 
-- Host Python dependency drift if setup is bypassed
 - VRAM contention if multiple workers are increased aggressively
 - Misconfigured ComfyUI paths if services are started outside the provided scripts
 
 The native scripts reduce those risks by pinning versions, using one service per GPU, and standardizing the per-GPU filesystem layout.
+
+Dependency drift is mitigated by `pyproject.toml` + `uv.lock`: a single `uv sync` always reproduces the exact pinned environment. If new dependencies are needed, update `pyproject.toml` and regenerate `uv.lock` with `uv lock`.

@@ -24,9 +24,18 @@ Docker is no longer part of the runtime.
 - `ComfyUI/models` -> `models/comfyui`
 - `ComfyUI/custom_nodes/p2e` -> `p2e-local`
 
+## Dependency Management
+All Python dependencies are declared in `pyproject.toml` and pinned in `uv.lock`.
+`setup_host_environment.sh` runs a single `uv sync` to install everything in one shot.
+
+- Do **not** edit `requirements/` files — they no longer exist.
+- To add or update a dependency: edit `pyproject.toml`, then run `uv lock` to regenerate `uv.lock`.
+- `Comfy-Lock.yaml` is kept only for ComfyUI custom node git cloning (cm-cli). Pip entries there are ignored.
+- `torch`, `torchvision`, and `torchaudio` are sourced from the `pytorch-cu128` index defined in `pyproject.toml` — never let anything reinstall these from PyPI.
+
 ## Main Entry Points
 - `setup_host_environment.sh`
-  - Installs the host Python environment, ComfyUI, ComfyUI-Manager, custom nodes, and pipeline dependencies
+  - Clones ComfyUI, ComfyUI-Manager, and custom nodes; runs `uv sync` from `pyproject.toml`
 - `run_comfyui_cluster.sh`
   - Starts or reuses one ComfyUI tmux service per GPU
 - `run_multi_gpu_pipeline.sh`

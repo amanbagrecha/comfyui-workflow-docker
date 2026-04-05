@@ -1,6 +1,6 @@
 # Pipeline-specific Python dependencies
-# Baked into the Docker image at build time.
-# To update: edit this file and rebuild the image.
+# Installed into the host-native .venv by setup_host_environment.sh.
+# To update: edit this file and rerun the setup script.
 #
 # PyTorch is pinned here with the cu128 index so both the early torch bootstrap
 # and the final pipeline install reuse the same CUDA wheels. Targets:

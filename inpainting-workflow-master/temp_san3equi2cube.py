@@ -59,7 +59,7 @@ def infer_mask(
 @click.option("--overwrite/--no-overwrite", default=False, show_default=True)
 @click.option(
     "--model-path",
-    default="/data/comfyui-workflow-docker/repo/models/comfyui/sam3",
+    default=str(Path(__file__).resolve().parents[1] / "models" / "comfyui" / "sam3"),
     show_default=True,
 )
 @click.option(

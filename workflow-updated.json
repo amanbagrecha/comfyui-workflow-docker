@@ -569,7 +569,7 @@
   },
   "60": {
     "inputs": {
-      "image_path": "/workspace/output-sam3-mask/test20-cube-20260305_172657-g0/1000115107555_1435204462014_ladybug_panoramic_000012.png",
+      "image_path": "sam3_mask_placeholder.png",
       "RGBA": "false",
       "filename_text_extension": "true"
     },

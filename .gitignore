@@ -22,6 +22,7 @@ input/
 output/
 output-*/
 comfy_outputs/
+native_data/
 
 # Runtime and Log Files
 nohup.out
@@ -49,5 +50,5 @@ Thumbs.db
 tmp/
 temp/
 
-# Docker volumes (if any)
+# Local runtime volumes
 volumes/

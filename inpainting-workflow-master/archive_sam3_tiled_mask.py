@@ -16,7 +16,7 @@ from transformers import Sam3Model, Sam3Processor
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp"}
-DEFAULT_MODEL_PATH = "/workspace/ComfyUI/models/sam3"
+DEFAULT_MODEL_PATH = str(Path(__file__).resolve().parents[1] / "models" / "comfyui" / "sam3")
 PREDICT_FACES = ("Front", "Right", "Back", "Left", "Up")
 ALL_FACES = ("Front", "Right", "Back", "Left", "Up", "Down")
 

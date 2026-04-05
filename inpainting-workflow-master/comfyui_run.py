@@ -11,8 +11,8 @@ import requests
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
-DEFAULT_COMFY_INPUT_ROOT = Path("/workspace/ComfyUI/input")
-DEFAULT_COMFY_OUTPUT_ROOT = Path("/workspace/ComfyUI/output")
+DEFAULT_COMFY_INPUT_ROOT = Path("input")
+DEFAULT_COMFY_OUTPUT_ROOT = Path("output")
 IMAGE_NODE_TYPES = {"LoadImage", "Image Load"}
 MASK_NODE_TYPES = {"LoadImage", "LoadImageMask", "Image Load"}
 SAVE_NODE_SUFFIX_BY_ID = {
@@ -88,13 +88,13 @@ def timer(func):
 @click.option("--timeout-s", default=1800, show_default=True)
 @click.option(
     "--comfy-input-root",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    type=click.Path(file_okay=False, path_type=Path),
     default=DEFAULT_COMFY_INPUT_ROOT,
     show_default=True,
 )
 @click.option(
     "--comfy-output-root",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    type=click.Path(file_okay=False, path_type=Path),
     default=DEFAULT_COMFY_OUTPUT_ROOT,
     show_default=True,
 )

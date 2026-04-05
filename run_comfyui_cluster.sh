@@ -1,17 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export PATH="$HOME/.local/bin:$PATH"
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${REPO:-$SCRIPT_DIR}"
 PIPELINE_HELPERS="$REPO/inpainting-workflow-master/pipeline_helpers.py"
-DEFAULT_PYTHON_BIN="$REPO/.venv/bin/python"
-if [ -x "$DEFAULT_PYTHON_BIN" ]; then
-  PYTHON_BIN="${PYTHON_BIN:-$DEFAULT_PYTHON_BIN}"
-else
-  PYTHON_BIN="${PYTHON_BIN:-python3}"
-fi
+# shellcheck disable=SC1091
+. "$REPO/scripts/runtime.sh"
+
+require_repo_python
 
 GPU_IDS_RAW="${GPU_IDS:-auto}"
 MAX_GPUS="${MAX_GPUS:-0}"
@@ -29,18 +25,6 @@ HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-2}"
 HEALTH_POLL="${HEALTH_POLL:-1}"
 
 mkdir -p "$WORK_ROOT/jobs"
-
-if [[ "$PYTHON_BIN" == */* ]]; then
-  if [ ! -x "$PYTHON_BIN" ]; then
-    echo "ERROR: PYTHON_BIN is not executable: $PYTHON_BIN"
-    exit 1
-  fi
-else
-  if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-    echo "ERROR: python executable not found: $PYTHON_BIN"
-    exit 1
-  fi
-fi
 
 for cmd in tmux nvidia-smi; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -120,7 +104,6 @@ set -euo pipefail
 cd "$REPO"
 export PATH="$HOME/.local/bin:\$PATH"
 export REPO="$REPO"
-export PYTHON_BIN="$PYTHON_BIN"
 export GPU_ID="$gpu_id"
 export CUDA_VISIBLE_DEVICES="$gpu_id"
 export COMFY_PORT="$port"

@@ -1,17 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export PATH="$HOME/.local/bin:$PATH"
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 REPO="${REPO:-$SCRIPT_DIR}"
-DEFAULT_PYTHON_BIN="$REPO/.venv/bin/python"
-if [ -x "$DEFAULT_PYTHON_BIN" ]; then
-  PYTHON_BIN="${PYTHON_BIN:-$DEFAULT_PYTHON_BIN}"
-else
-  PYTHON_BIN="${PYTHON_BIN:-python3}"
-fi
+# shellcheck disable=SC1091
+. "$REPO/scripts/runtime.sh"
+
+require_repo_python
 
 GPU_ID="${GPU_ID:-${CUDA_VISIBLE_DEVICES:-0}}"
 SRC="${SRC:-}"
@@ -30,6 +26,8 @@ COMFY_PORT="${COMFY_PORT:-8180}"
 COMFY_SERVER="${COMFY_SERVER:-http://127.0.0.1:${COMFY_PORT}}"
 COMFY_INPUT_ROOT="${COMFY_INPUT_ROOT:-$COMFY_DATA_DIR/input}"
 COMFY_OUTPUT_ROOT="${COMFY_OUTPUT_ROOT:-$COMFY_DATA_DIR/output}"
+COMFY_TMUX_SESSION_PREFIX="${COMFY_TMUX_SESSION_PREFIX:-comfyui}"
+COMFY_SESSION_NAME="${COMFY_SESSION_NAME:-${COMFY_TMUX_SESSION_PREFIX}-g${GPU_ID}}"
 
 POSTPROCESS_WORKERS="${POSTPROCESS_WORKERS:-3}"
 PRIVACY_WORKERS="${PRIVACY_WORKERS:-4}"
@@ -115,6 +113,7 @@ OUT1=""
 OUT_MASK=""
 OUT2=""
 OUT3=""
+COMFY_STARTED_BY_THIS_RUN=0
 
 EVENT_BASE_ARGS=(
   append-event
@@ -313,6 +312,34 @@ on_exit() {
   fi
 
   log_event "${event_args[@]}"
+
+  if [ "$COMFY_STARTED_BY_THIS_RUN" = "1" ] && tmux has-session -t "$COMFY_SESSION_NAME" 2>/dev/null; then
+    tmux kill-session -t "$COMFY_SESSION_NAME" >/dev/null 2>&1 || true
+  fi
+}
+
+ensure_comfyui_service() {
+  if "$PYTHON_BIN" "$PIPELINE_HELPERS" wait-http --url "$COMFY_SERVER/system_stats" --timeout 2 --poll 1 >/dev/null 2>&1; then
+    return 0
+  fi
+
+  GPU_IDS="$GPU_ID" \
+  MAX_GPUS=1 \
+  BASE_COMFY_PORT="$COMFY_PORT" \
+  COMFYUI_HOME="$COMFYUI_HOME" \
+  NATIVE_DATA_ROOT="$NATIVE_DATA_ROOT" \
+  TMUX_SESSION_PREFIX="$COMFY_TMUX_SESSION_PREFIX" \
+  COMFY_READY_TIMEOUT="$COMFY_READY_TIMEOUT" \
+  COMFY_READY_POLL="$COMFY_READY_POLL" \
+  "$REPO/run_comfyui_cluster.sh"
+
+  COMFY_STARTED_BY_THIS_RUN=1
+}
+
+stop_comfyui_service() {
+  if tmux has-session -t "$COMFY_SESSION_NAME" 2>/dev/null; then
+    tmux kill-session -t "$COMFY_SESSION_NAME"
+  fi
 }
 
 trap 'on_error $? $LINENO "$BASH_COMMAND"' ERR
@@ -343,18 +370,6 @@ if [[ "$STOP_AFTER_STAGE" != "sam3" && "$STOP_AFTER_STAGE" != "inpainting" && "$
   exit 1
 fi
 
-if [[ "$PYTHON_BIN" == */* ]]; then
-  if [ ! -x "$PYTHON_BIN" ]; then
-    echo "ERROR: PYTHON_BIN is not executable: $PYTHON_BIN"
-    exit 1
-  fi
-else
-  if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-    echo "ERROR: python executable not found: $PYTHON_BIN"
-    exit 1
-  fi
-fi
-
 if ! command -v nvidia-smi >/dev/null 2>&1; then
   echo "ERROR: nvidia-smi not found on host. NVIDIA drivers/GPU are required for this pipeline."
   exit 1
@@ -362,6 +377,11 @@ fi
 
 if ! command -v wget >/dev/null 2>&1; then
   echo "ERROR: wget is required (used by download-models.sh)."
+  exit 1
+fi
+
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "ERROR: tmux is required to start/stop ComfyUI services."
   exit 1
 fi
 
@@ -389,7 +409,6 @@ echo "RUN_ID=$RUN_ID"
 echo "LOG_FILE=$LOG_FILE"
 echo "EVENTS_FILE=$EVENTS_FILE"
 echo "REPO=$REPO"
-echo "PYTHON_BIN=$PYTHON_BIN"
 echo "SRC=$SRC"
 echo "BATCH_NAME=$BATCH_NAME"
 echo "GPU_ID=$GPU_ID"
@@ -397,6 +416,7 @@ echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 echo "COMFYUI_HOME=$COMFYUI_HOME"
 echo "COMFY_PORT=$COMFY_PORT"
 echo "COMFY_SERVER=$COMFY_SERVER"
+echo "COMFY_SESSION_NAME=$COMFY_SESSION_NAME"
 echo "COMFY_INPUT_ROOT=$COMFY_INPUT_ROOT"
 echo "COMFY_OUTPUT_ROOT=$COMFY_OUTPUT_ROOT"
 echo "COMFY_DATA_DIR=$COMFY_DATA_DIR"
@@ -565,16 +585,6 @@ E_HARD=$(date +%s)
 HARDLINK_SEC=$((E_HARD - S_HARD))
 finish_stage hardlink_stage "$HARDLINK_SEC"
 
-S_WAIT=$(date +%s)
-WAIT_CMD=$(quote_cmd "$PYTHON_BIN" "$PIPELINE_HELPERS" wait-http --url "$COMFY_SERVER/system_stats" --timeout "$COMFY_READY_TIMEOUT" --poll "$COMFY_READY_POLL")
-start_stage wait_comfyui "$WAIT_CMD"
-"$PYTHON_BIN" "$PIPELINE_HELPERS" wait-http \
-  --url "$COMFY_SERVER/system_stats" \
-  --timeout "$COMFY_READY_TIMEOUT" \
-  --poll "$COMFY_READY_POLL"
-E_WAIT=$(date +%s)
-finish_stage wait_comfyui "$((E_WAIT - S_WAIT))"
-
 S_SAM3=$(date +%s)
 SAM3_CMD=$(quote_cmd "$PYTHON_BIN" "$REPO/inpainting-workflow-master/$SAM3_SCRIPT" --input-dir "$DST" --output-dir "$OUT_MASK" --pattern '*' --model-path "$MODELS_COMFYUI_DIR/sam3" --glare-threshold "$SAM3_GLARE_THRESHOLD" --tile-rows "$SAM3_TILE_ROWS" --tile-cols "$SAM3_TILE_COLS" --resize-width "$SAM3_RESIZE_WIDTH" --resize-height "$SAM3_RESIZE_HEIGHT" --workers "$SAM3_WORKERS")
 start_stage sam3_mask "$SAM3_CMD"
@@ -604,6 +614,13 @@ if [ "$STOP_AFTER_STAGE" = "sam3" ]; then
   skip_stage postprocess STOP_AFTER_STAGE=sam3
   skip_stage egoblur STOP_AFTER_STAGE=sam3
 else
+  S_WAIT=$(date +%s)
+  WAIT_CMD=$(quote_cmd ensure_comfyui_service)
+  start_stage wait_comfyui "$WAIT_CMD"
+  ensure_comfyui_service
+  E_WAIT=$(date +%s)
+  finish_stage wait_comfyui "$((E_WAIT - S_WAIT))"
+
   S_INP=$(date +%s)
   INPAINT_CMD=$(quote_cmd "$PYTHON_BIN" "$REPO/inpainting-workflow-master/comfyui_run.py" --workflow-json "$WORKFLOW_JSON" --server "$COMFY_SERVER" --input-dir "$DST" --mask "$COMFY_INPUT_ROOT/perspective_mask.png" --sam3-mask-dir "$OUT_MASK" --output-dir "$OUT1" --image-node-id "$COMFY_IMAGE_NODE_ID" --mask-node-id "$COMFY_MASK_NODE_ID" --sam3-mask-node-id "$COMFY_SAM3_MASK_NODE_ID" --workers 1 --timeout-s 3600 --comfy-input-root "$COMFY_INPUT_ROOT" --comfy-output-root "$COMFY_OUTPUT_ROOT")
   start_stage inpainting "$INPAINT_CMD"
@@ -630,6 +647,14 @@ else
     fail_stage inpainting "No inpainting outputs found in $OUT1; aborting downstream stages."
   fi
   finish_stage inpainting "$INPAINT_SEC" --metric output_count="$COUNT_INPAINT"
+
+  S_STOP=$(date +%s)
+  STOP_CMD=$(quote_cmd stop_comfyui_service)
+  start_stage stop_comfyui "$STOP_CMD"
+  stop_comfyui_service
+  COMFY_STARTED_BY_THIS_RUN=0
+  E_STOP=$(date +%s)
+  finish_stage stop_comfyui "$((E_STOP - S_STOP))"
 
   if [ "$STOP_AFTER_STAGE" = "inpainting" ]; then
     skip_stage postprocess STOP_AFTER_STAGE=inpainting

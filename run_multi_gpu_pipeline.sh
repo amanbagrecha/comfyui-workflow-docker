@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export PATH="$HOME/.local/bin:$PATH"
-
 usage() {
   cat <<'EOF'
 Usage:
@@ -17,7 +15,6 @@ Environment variables:
   NATIVE_DATA_ROOT          Optional. Default: <repo>/native_data
   COMFYUI_HOME              Optional. Default: <repo>/ComfyUI
   TMUX_SESSION_PREFIX       Optional. Default: mgpu
-  COMFY_TMUX_SESSION_PREFIX Optional. Default: comfyui
   WORK_ROOT                 Optional. Default: <repo>/tmp/multigpu/<RUN_NAME>
   WAIT_POLL_SEC             Optional. Default: 10
   FINAL_OUTPUT_DIR          Optional. If set, writes merged outputs under
@@ -25,29 +22,6 @@ Environment variables:
   STRICT_HARDLINK           Optional. 1 = fail when hardlink is not possible.
                             0 = allow copy fallback. Default: 1.
   DRY_RUN                   Optional. 1 = prepare/print plan only, no launches.
-  START_COMFYUI_CLUSTER     Optional. 1 = ensure per-GPU ComfyUI services are up.
-                            0 = assume they already exist. Default: 1.
-
-Forwarded to each shard run_full_pipeline.sh invocation (per GPU):
-  PYTHON_BIN, MODELS_ROOT, MODELS_COMFYUI_DIR, MODELS_PRIVACY_DIR,
-  AUTO_DOWNLOAD_MODELS, FORCE_REPROCESS, STRICT_HARDLINK,
-  SAM3_WORKERS, SAM3_RESIZE_WIDTH, SAM3_RESIZE_HEIGHT, SAM3_GLARE_THRESHOLD,
-  SAM3_TILE_ROWS, SAM3_TILE_COLS, SAM3_SCRIPT,
-  POSTPROCESS_WORKERS,
-  PRIVACY_WORKERS, PRIVACY_FACE_MODEL, PRIVACY_LP_MODEL,
-  PRIVACY_FACE_CONF, PRIVACY_LP_CONF, PRIVACY_FACE_IOU, PRIVACY_FACE_IMGSZ,
-  PRIVACY_DET_FACE_W, PRIVACY_P360_DEVICE, PRIVACY_BLUR_SCOPE,
-  PRIVACY_BLUR_BACKEND, PRIVACY_OUTPUT_MODE,
-  COMFY_IMAGE_NODE_ID, COMFY_MASK_NODE_ID, COMFY_SAM3_MASK_NODE_ID,
-  SKY_REFERENCE_SOURCE, SKY_REFERENCE_FILENAME,
-  LAPLACIAN_DILATION, LAPLACIAN_BLUR, LAPLACIAN_LEVELS,
-  STOP_AFTER_STAGE,
-  COMFY_READY_TIMEOUT, COMFY_READY_POLL.
-
-Notes:
-  - Input sharding is automatic (sequential contiguous splits) using hardlinks when possible.
-  - One shard run is launched per GPU in tmux.
-  - One ComfyUI API service per GPU is started or reused via run_comfyui_cluster.sh.
 EOF
 }
 
@@ -58,12 +32,11 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${REPO:-$SCRIPT_DIR}"
-DEFAULT_PYTHON_BIN="$REPO/.venv/bin/python"
-if [ -x "$DEFAULT_PYTHON_BIN" ]; then
-  PYTHON_BIN="${PYTHON_BIN:-$DEFAULT_PYTHON_BIN}"
-else
-  PYTHON_BIN="${PYTHON_BIN:-python3}"
-fi
+# shellcheck disable=SC1091
+. "$REPO/scripts/runtime.sh"
+
+ensure_uv
+ensure_repo_python
 
 SRC="${SRC:-}"
 if [[ -z "$SRC" ]]; then
@@ -84,12 +57,10 @@ BASE_COMFY_PORT="${BASE_COMFY_PORT:-8180}"
 NATIVE_DATA_ROOT="${NATIVE_DATA_ROOT:-$REPO/native_data}"
 COMFYUI_HOME="${COMFYUI_HOME:-$REPO/ComfyUI}"
 TMUX_SESSION_PREFIX="${TMUX_SESSION_PREFIX:-mgpu}"
-COMFY_TMUX_SESSION_PREFIX="${COMFY_TMUX_SESSION_PREFIX:-comfyui}"
 WORK_ROOT="${WORK_ROOT:-$REPO/tmp/multigpu/$RUN_NAME}"
 WAIT_POLL_SEC="${WAIT_POLL_SEC:-10}"
 DRY_RUN="${DRY_RUN:-0}"
 STRICT_HARDLINK="${STRICT_HARDLINK:-1}"
-START_COMFYUI_CLUSTER="${START_COMFYUI_CLUSTER:-1}"
 
 STOP_AFTER_STAGE="${STOP_AFTER_STAGE:-egoblur}"
 PIPELINE_HELPERS="$REPO/inpainting-workflow-master/pipeline_helpers.py"
@@ -255,23 +226,6 @@ if [[ "$DRY_RUN" != "0" && "$DRY_RUN" != "1" ]]; then
   exit 1
 fi
 
-if [[ "$START_COMFYUI_CLUSTER" != "0" && "$START_COMFYUI_CLUSTER" != "1" ]]; then
-  echo "ERROR: START_COMFYUI_CLUSTER must be 0 or 1"
-  exit 1
-fi
-
-if [[ "$PYTHON_BIN" == */* ]]; then
-  if [ ! -x "$PYTHON_BIN" ]; then
-    echo "ERROR: PYTHON_BIN is not executable: $PYTHON_BIN"
-    exit 1
-  fi
-else
-  if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-    echo "ERROR: python executable not found: $PYTHON_BIN"
-    exit 1
-  fi
-fi
-
 for cmd in nvidia-smi tmux wget; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "ERROR: required command not found: $cmd"
@@ -285,14 +239,9 @@ if [[ ! -x "$RUN_FULL" ]]; then
   exit 1
 fi
 
-RUN_COMFY_CLUSTER="$REPO/run_comfyui_cluster.sh"
-if [[ "$START_COMFYUI_CLUSTER" == "1" && ! -x "$RUN_COMFY_CLUSTER" ]]; then
-  echo "ERROR: run_comfyui_cluster.sh not found or not executable at $RUN_COMFY_CLUSTER"
-  exit 1
-fi
-
-if [[ ! -d "$COMFYUI_HOME" && "$DRY_RUN" != "1" ]]; then
-  echo "ERROR: COMFYUI_HOME not found: $COMFYUI_HOME"
+RUN_BOOTSTRAP="$REPO/setup_host_environment.sh"
+if [[ ! -x "$RUN_BOOTSTRAP" ]]; then
+  echo "ERROR: setup_host_environment.sh not found or not executable at $RUN_BOOTSTRAP"
   exit 1
 fi
 
@@ -327,7 +276,6 @@ log_event \
   --param stop_after_stage="$STOP_AFTER_STAGE" \
   --param strict_hardlink="$STRICT_HARDLINK" \
   --param dry_run="$DRY_RUN" \
-  --param start_comfyui_cluster="$START_COMFYUI_CLUSTER" \
   --metric num_gpus="$NUM_GPUS" \
   --path log_file="$LOG_FILE" \
   --path events_file="$EVENTS_FILE" \
@@ -350,7 +298,26 @@ echo "EVENTS_FILE=$EVENTS_FILE"
 echo "STOP_AFTER_STAGE=$STOP_AFTER_STAGE"
 echo "STRICT_HARDLINK=$STRICT_HARDLINK"
 echo "DRY_RUN=$DRY_RUN"
-echo "START_COMFYUI_CLUSTER=$START_COMFYUI_CLUSTER"
+
+if [[ "$DRY_RUN" == "0" ]]; then
+  set_step bootstrap_host
+  MODELS_ROOT="${MODELS_ROOT:-$REPO/models}" \
+  MODELS_COMFYUI_DIR="${MODELS_COMFYUI_DIR:-${MODELS_ROOT:-$REPO/models}/comfyui}" \
+  MODELS_PRIVACY_DIR="${MODELS_PRIVACY_DIR:-${MODELS_ROOT:-$REPO/models}/privacy_blur}" \
+  COMFYUI_HOME="$COMFYUI_HOME" \
+  DOWNLOAD_MODELS="${AUTO_DOWNLOAD_MODELS:-1}" \
+  INSTALL_SYSTEM_PACKAGES="${INSTALL_SYSTEM_PACKAGES:-1}" \
+  "$RUN_BOOTSTRAP"
+  require_repo_python
+  clear_step
+
+  if [[ ! -d "$COMFYUI_HOME" ]]; then
+    echo "ERROR: COMFYUI_HOME not found after bootstrap: $COMFYUI_HOME"
+    exit 1
+  fi
+else
+  require_repo_python
+fi
 
 set_step split_shards
 "$PYTHON_BIN" "$PIPELINE_HELPERS" split-shards \
@@ -407,19 +374,8 @@ if [[ "$DRY_RUN" == "0" ]]; then
     echo "All required models present."
   fi
 
-  if [[ "$START_COMFYUI_CLUSTER" == "1" ]]; then
-    GPU_IDS="$GPU_IDS_CSV" \
-    BASE_COMFY_PORT="$BASE_COMFY_PORT" \
-    COMFYUI_HOME="$COMFYUI_HOME" \
-    NATIVE_DATA_ROOT="$NATIVE_DATA_ROOT" \
-    TMUX_SESSION_PREFIX="$COMFY_TMUX_SESSION_PREFIX" \
-    COMFY_READY_TIMEOUT="${COMFY_READY_TIMEOUT:-300}" \
-    COMFY_READY_POLL="${COMFY_READY_POLL:-2}" \
-    PYTHON_BIN="$PYTHON_BIN" \
-    "$RUN_COMFY_CLUSTER"
-  fi
 else
-  echo "DRY_RUN=1: skipping model checks and ComfyUI service startup."
+  echo "DRY_RUN=1: skipping dependency install and model checks."
 fi
 clear_step
 
@@ -459,6 +415,7 @@ export BATCH_NAME="$batch_name"
 export COMFY_PORT="$comfy_port"
 export COMFY_SERVER="http://127.0.0.1:$comfy_port"
 export COMFYUI_HOME="$COMFYUI_HOME"
+export COMFY_TMUX_SESSION_PREFIX="comfyui"
 export NATIVE_DATA_ROOT="$NATIVE_DATA_ROOT"
 export COMFY_DATA_DIR="$comfy_data_dir"
 export COMFY_INPUT_ROOT="$comfy_data_dir/input"
@@ -501,7 +458,6 @@ export SKY_REFERENCE_SOURCE="${SKY_REFERENCE_SOURCE:-$REPO/inpainting-workflow-m
 export SKY_REFERENCE_FILENAME="${SKY_REFERENCE_FILENAME:-chrome_xWUjmfs7m4.png}"
 export COMFY_READY_TIMEOUT="${COMFY_READY_TIMEOUT:-300}"
 export COMFY_READY_POLL="${COMFY_READY_POLL:-2}"
-export PYTHON_BIN="$PYTHON_BIN"
 export SKIP_PREFLIGHT=1
 export RUN_ID="$child_run_id"
 export PARENT_RUN_ID="$RUN_NAME"

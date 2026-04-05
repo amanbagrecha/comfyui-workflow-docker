@@ -9,7 +9,7 @@ The native production layout is:
 1. One shared host Python environment in `.venv`
 2. One pinned local `ComfyUI/` checkout
 3. One shared model cache under `models/comfyui` and `models/privacy_blur`
-4. One long-lived ComfyUI API service per GPU
+4. One temporary ComfyUI API service per GPU during inpainting
 5. One per-GPU worker data root under `native_data/gpu<id>`
 6. One tmux shard worker per GPU during pipeline runs
 
@@ -54,41 +54,27 @@ The pipeline stages remain the same:
 | `/workspace/models/privacy_blur` | `models/privacy_blur` |
 | `/workspace/inpainting` | `inpainting-workflow-master` |
 
-## Host Bootstrap
+## Single Public Entry Point
 
-Run:
-
-```bash
-./setup_host_environment.sh
-```
-
-What it does:
-
-1. Installs host packages when `INSTALL_SYSTEM_PACKAGES=1`
-2. Installs `uv`
-3. Creates `.venv`
-4. Clones and pins `ComfyUI`
-5. Clones and pins `ComfyUI-Manager`
-6. Restores `Comfy-Lock.yaml`
-7. Clones `p2e-lib`
-8. Installs `pipeline-requirements.txt`
-9. Installs pipeline-only packages such as `simple-lama-inpainting`, `ultralytics`, and `open-image-models`
-10. Symlinks `ComfyUI/models` to `models/comfyui`
-11. Symlinks `ComfyUI/custom_nodes/p2e` to `p2e-local`
-12. Downloads models unless `DOWNLOAD_MODELS=0`
-
-Useful overrides:
+Normal operation uses one command only:
 
 ```bash
-MODELS_ROOT="/data/shared-models" \
-INSTALL_SYSTEM_PACKAGES=0 \
-DOWNLOAD_MODELS=1 \
-./setup_host_environment.sh
+SRC="/absolute/path/to/input_images" \
+FINAL_OUTPUT_DIR="/absolute/path/to/final_outputs" \
+./run_multi_gpu_pipeline.sh
 ```
 
-## ComfyUI Services
+`run_multi_gpu_pipeline.sh` bootstraps a `uv`-managed Python `3.12` environment, downloads missing models, runs one shard per GPU, starts ComfyUI only for inpainting, stops it after inpainting, and merges final outputs.
 
-Each GPU gets one local ComfyUI HTTP API process.
+## Internal Bootstrap Helper
+
+`setup_host_environment.sh` still exists, but it is an internal helper used by `run_multi_gpu_pipeline.sh`.
+
+It installs `uv`, creates `.venv`, pins `ComfyUI`, restores `Comfy-Lock.yaml`, installs dependencies, links the model paths, and downloads missing models.
+
+## Internal ComfyUI Helper
+
+Each GPU gets one local ComfyUI HTTP API process only during the inpainting stage by default.
 
 Example service mapping:
 
@@ -96,25 +82,11 @@ Example service mapping:
 - GPU 1 -> port `8181` -> `native_data/gpu1`
 - GPU 2 -> port `8182` -> `native_data/gpu2`
 
-Start all requested services with:
-
-```bash
-./run_comfyui_cluster.sh
-```
-
-Examples:
-
-```bash
-GPU_IDS="0,1,3" ./run_comfyui_cluster.sh
-MAX_GPUS=2 BASE_COMFY_PORT=8180 ./run_comfyui_cluster.sh
-RESTART_EXISTING=1 ./run_comfyui_cluster.sh
-```
-
-This creates tmux sessions named `comfyui-g<gpu-id>` by default.
+`run_comfyui_cluster.sh` is still available for debugging, but operators should not need it in normal usage.
 
 ## Multi-GPU Pipeline Run
 
-Once the host environment and ComfyUI services are ready, run:
+Run:
 
 ```bash
 SRC="/absolute/path/to/input_images" \
@@ -136,15 +108,6 @@ STOP_AFTER_STAGE=postprocess \
 ./run_multi_gpu_pipeline.sh
 ```
 
-The orchestrator will:
-
-1. Validate models
-2. Split `SRC` into one shard per selected GPU
-3. Start or reuse ComfyUI services unless `START_COMFYUI_CLUSTER=0`
-4. Launch one tmux shard worker per GPU
-5. Wait for all shard workers to finish
-6. Merge the selected stage outputs into `FINAL_OUTPUT_DIR/<run-name>/gpu<id>`
-
 ## Single-Shard Debug Run
 
 You can still run one shard directly:
@@ -162,7 +125,7 @@ BATCH_NAME="debug-g0" \
 
 1. Start with `SAM3_WORKERS=1`, `POSTPROCESS_WORKERS=1`, and `PRIVACY_WORKERS=1`
 2. Scale worker counts only after confirming stable VRAM headroom
-3. Keep one ComfyUI service per GPU
+3. ComfyUI is stopped after inpainting so VRAM is reclaimed before downstream stages
 4. Use shared model storage when multiple checkouts live on the same host
 5. Move the `run_comfyui_service.sh` command into `systemd` once the tmux workflow is validated
 

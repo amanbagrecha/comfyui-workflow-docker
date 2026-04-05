@@ -12,80 +12,30 @@ This repository no longer uses Docker. The full workflow runs directly on the ho
 
 ## Overview
 
-The main runtime flow is:
-
-1. `setup_host_environment.sh`
-2. `download-models.sh` if you skipped model download during setup
-3. `run_comfyui_cluster.sh`
-4. `run_multi_gpu_pipeline.sh`
-
-The orchestrator shards one `SRC` directory across available GPUs, launches one worker per GPU in tmux, and merges the final outputs under `FINAL_OUTPUT_DIR/<run-name>/gpu<id>/`.
+`run_multi_gpu_pipeline.sh` is the main command.
+It bootstraps a `uv`-managed Python `3.12` environment, downloads missing models, runs inpainting, stops ComfyUI to free VRAM, and finishes the remaining stages.
 
 ## Requirements
 
 - Ubuntu or Debian-like host recommended
 - NVIDIA driver installed and working via `nvidia-smi`
-- Python 3
+- `curl` or `wget`
 - tmux
 - Enough local disk for models and intermediate outputs
 
-The Python environment, pinned ComfyUI checkout, custom nodes, and pipeline dependencies are installed by `setup_host_environment.sh`.
+The host runtime is auto-installed by `run_multi_gpu_pipeline.sh` on first use.
 
 ## Quick Start
 
-### 1. Install the host environment
-
-```bash
-./setup_host_environment.sh
-```
-
-Defaults:
-
-- Creates `.venv/`
-- Clones `ComfyUI/` at the pinned commit used by this repo
-- Restores `Comfy-Lock.yaml`
-- Clones `p2e-lib/`
-- Symlinks `ComfyUI/models` to `models/comfyui`
-- Symlinks `ComfyUI/custom_nodes/p2e` to `p2e-local`
-- Downloads models unless `DOWNLOAD_MODELS=0`
-
-Useful overrides:
-
-```bash
-MODELS_ROOT="/data/shared-models" \
-INSTALL_SYSTEM_PACKAGES=0 \
-DOWNLOAD_MODELS=1 \
-./setup_host_environment.sh
-```
-
-### 2. Start one ComfyUI service per GPU
-
-```bash
-./run_comfyui_cluster.sh
-```
-
-Examples:
-
-```bash
-# All detected GPUs
-./run_comfyui_cluster.sh
-
-# Specific GPUs
-GPU_IDS="0,1,3" ./run_comfyui_cluster.sh
-
-# First 2 detected GPUs starting at port 8180
-MAX_GPUS=2 BASE_COMFY_PORT=8180 ./run_comfyui_cluster.sh
-```
-
-This creates tmux sessions named `comfyui-g<gpu-id>` by default.
-
-### 3. Run the full multi-GPU pipeline
+### Run The Full Pipeline
 
 ```bash
 SRC="/absolute/path/to/input_images" \
 FINAL_OUTPUT_DIR="/absolute/path/to/final_outputs" \
 ./run_multi_gpu_pipeline.sh
 ```
+
+That is the only command you need for normal runs.
 
 Examples:
 
@@ -141,18 +91,10 @@ Per-GPU worker roots use the physical GPU id, not the shard index.
 
 ## Main Scripts
 
-- `setup_host_environment.sh`
-  - Installs the pinned host Python environment and ComfyUI runtime
-- `run_comfyui_service.sh`
-  - Starts one local ComfyUI API service for one GPU
-- `run_comfyui_cluster.sh`
-  - Starts or reuses one ComfyUI tmux session per GPU
-- `run_full_pipeline.sh`
-  - Runs one shard on one GPU
-- `run_multi_gpu_pipeline.sh`
-  - Splits one `SRC` across GPUs and merges outputs
-- `download-models.sh`
-  - Downloads required models into `models/comfyui` and `models/privacy_blur`
+- `run_multi_gpu_pipeline.sh`: main entrypoint
+- `run_full_pipeline.sh`: per-GPU shard runner
+- `setup_host_environment.sh`: internal bootstrap helper
+- `run_comfyui_service.sh`: internal ComfyUI launcher
 
 ## Important Environment Variables
 
@@ -212,9 +154,8 @@ Merged outputs:
 ## Production Notes
 
 - Start with one worker per heavy stage on each GPU and scale only after measuring VRAM usage.
-- `run_comfyui_cluster.sh` uses tmux for simplicity. For long-lived production services, move the same command line into `systemd` units.
+- ComfyUI is always stopped after inpainting to release VRAM before downstream stages.
 - Keep the model cache on shared local storage if multiple repo copies use the same machine.
-- The orchestrator can auto-start missing ComfyUI services. Set `START_COMFYUI_CLUSTER=0` if you manage them externally.
 
 ## Migration Guide
 

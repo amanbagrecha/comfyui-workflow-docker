@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export PATH="$HOME/.local/bin:$PATH"
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${REPO:-$SCRIPT_DIR}"
-VENV_DIR="${VENV_DIR:-$REPO/.venv}"
+# shellcheck disable=SC1091
+. "$REPO/scripts/runtime.sh"
+
+ensure_uv
+
+VENV_DIR="$REPO/.venv"
 COMFYUI_HOME="${COMFYUI_HOME:-$REPO/ComfyUI}"
 MODELS_ROOT="${MODELS_ROOT:-$REPO/models}"
 MODELS_COMFYUI_DIR="${MODELS_COMFYUI_DIR:-$MODELS_ROOT/comfyui}"
@@ -45,25 +48,10 @@ install_system_packages() {
     git \
     curl \
     wget \
-    python3 \
-    python3-venv \
-    python3-dev \
     build-essential \
     libgl1-mesa-glx \
     libglib2.0-0 \
     tmux
-}
-
-ensure_uv() {
-  if command -v uv >/dev/null 2>&1; then
-    return 0
-  fi
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  export PATH="$HOME/.local/bin:$PATH"
-  if ! command -v uv >/dev/null 2>&1; then
-    echo "ERROR: uv installation failed"
-    exit 1
-  fi
 }
 
 clone_or_checkout() {
@@ -103,27 +91,24 @@ link_path() {
 
 install_system_packages
 
-for cmd in git curl wget python3; do
+for cmd in git; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "ERROR: required command not found: $cmd"
     exit 1
   fi
 done
 
-ensure_uv
-
 mkdir -p "$MODELS_COMFYUI_DIR" "$MODELS_PRIVACY_DIR"
 
-uv venv "$VENV_DIR"
-# shellcheck disable=SC1090
-source "$VENV_DIR/bin/activate"
+ensure_repo_python
+CM_CLI="$COMFYUI_HOME/custom_nodes/ComfyUI-Manager/cm-cli.py"
 
-uv pip install pip
-uv pip install comfy-cli
+uv pip install --python "$PYTHON_BIN" pip
+uv pip install --python "$PYTHON_BIN" comfy-cli
 
 clone_or_checkout https://github.com/comfyanonymous/ComfyUI "$COMFYUI_HOME" "$COMFYUI_COMMIT"
 clone_or_checkout https://github.com/ltdrdata/ComfyUI-Manager "$COMFYUI_HOME/custom_nodes/ComfyUI-Manager" "$COMFYUI_MANAGER_COMMIT"
-uv pip install -r "$COMFYUI_HOME/custom_nodes/ComfyUI-Manager/requirements.txt"
+uv pip install --python "$PYTHON_BIN" -r "$COMFYUI_HOME/custom_nodes/ComfyUI-Manager/requirements.txt"
 
 TORCH_REQS=$(mktemp)
 COMFY_CORE_REQS=$(mktemp)
@@ -132,7 +117,7 @@ cleanup_tmp() {
 }
 trap cleanup_tmp EXIT
 
-"$VENV_DIR/bin/python" - "$REPO/pipeline-requirements.txt" "$TORCH_REQS" <<'PY'
+"$PYTHON_BIN" - "$REPO/pipeline-requirements.txt" "$TORCH_REQS" <<'PY'
 from pathlib import Path
 import sys
 
@@ -148,9 +133,9 @@ for raw in src.read_text().splitlines():
 dst.write_text('\n'.join(keep) + '\n')
 PY
 
-uv pip install -r "$TORCH_REQS"
+uv pip install --python "$PYTHON_BIN" -r "$TORCH_REQS"
 
-"$VENV_DIR/bin/python" - "$COMFYUI_HOME/requirements.txt" "$COMFY_CORE_REQS" <<'PY'
+"$PYTHON_BIN" - "$COMFYUI_HOME/requirements.txt" "$COMFY_CORE_REQS" <<'PY'
 from pathlib import Path
 import sys
 
@@ -169,21 +154,22 @@ for raw in src.read_text().splitlines():
 dst.write_text('\n'.join(keep) + '\n')
 PY
 
-uv pip install -r "$COMFY_CORE_REQS"
+uv pip install --python "$PYTHON_BIN" -r "$COMFY_CORE_REQS"
 
-comfy --skip-prompt --workspace "$COMFYUI_HOME" node restore-snapshot \
-  --pip-non-url --pip-non-local-url \
-  "$REPO/Comfy-Lock.yaml"
+COMFYUI_PATH="$COMFYUI_HOME" "$PYTHON_BIN" "$CM_CLI" restore-snapshot \
+  "$REPO/Comfy-Lock.yaml" \
+  --pip-non-url \
+  --pip-non-local-url
 
 clone_or_checkout https://github.com/amanbagrecha/p2e.git "$P2E_LIB_DIR" "$P2E_COMMIT"
 
-uv pip install -r "$REPO/pipeline-requirements.txt"
-uv pip install --no-deps \
+uv pip install --python "$PYTHON_BIN" -r "$REPO/pipeline-requirements.txt"
+uv pip install --python "$PYTHON_BIN" --no-deps \
   simple-lama-inpainting==0.1.0 \
   ultralytics==8.4.21 \
   open-image-models==0.5.1
-"$VENV_DIR/bin/python" -m pip uninstall -y opencv-python opencv-python-headless || true
-uv pip install --no-deps opencv-contrib-python==4.12.0.88
+uv pip uninstall --python "$PYTHON_BIN" opencv-python opencv-python-headless || true
+uv pip install --python "$PYTHON_BIN" --no-deps opencv-contrib-python==4.12.0.88
 
 link_path "$MODELS_COMFYUI_DIR" "$COMFYUI_HOME/models"
 link_path "$REPO/p2e-local" "$COMFYUI_HOME/custom_nodes/p2e"
@@ -196,6 +182,5 @@ if [[ "$DOWNLOAD_MODELS" == "1" ]]; then
 fi
 
 echo "Host environment setup complete."
-echo "Next steps:"
-echo "  1. ./run_comfyui_cluster.sh"
-echo "  2. SRC=/abs/path/to/images FINAL_OUTPUT_DIR=/abs/path/to/final ./run_multi_gpu_pipeline.sh"
+echo "Run the pipeline with:"
+echo "  SRC=/abs/path/to/images FINAL_OUTPUT_DIR=/abs/path/to/final ./run_multi_gpu_pipeline.sh"

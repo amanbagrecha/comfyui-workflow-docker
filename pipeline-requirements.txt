@@ -1,5 +1,5 @@
 # Pipeline-specific Python dependencies
-# Installed into the host-native .venv by setup_host_environment.sh.
+# Installed into the host-native .venv by run_multi_gpu_pipeline.sh.
 # To update: edit this file and rerun the setup script.
 #
 # PyTorch is pinned here with the cu128 index so both the early torch bootstrap

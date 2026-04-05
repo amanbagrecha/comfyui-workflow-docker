@@ -52,3 +52,7 @@ temp/
 
 # Local runtime volumes
 volumes/
+
+# Cloned repos managed by setup_host_environment.sh
+ComfyUI/
+p2e-lib/

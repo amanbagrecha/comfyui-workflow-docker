@@ -115,18 +115,13 @@ mkdir -p "$MODELS_COMFYUI_DIR" "$MODELS_PRIVACY_DIR"
 ensure_repo_python
 CM_CLI="$COMFYUI_HOME/custom_nodes/ComfyUI-Manager/cm-cli.py"
 
-uv pip install --python "$PYTHON_BIN" pip
-
 clone_or_checkout https://github.com/comfyanonymous/ComfyUI "$COMFYUI_HOME" "$COMFYUI_COMMIT"
 clone_or_checkout https://github.com/ltdrdata/ComfyUI-Manager "$COMFYUI_HOME/custom_nodes/ComfyUI-Manager" "$COMFYUI_MANAGER_COMMIT"
-uv pip install --python "$PYTHON_BIN" -r "$COMFYUI_HOME/custom_nodes/ComfyUI-Manager/requirements.txt"
 
-uv pip install --python "$PYTHON_BIN" -r "$COMFY_CORE_REQS"
-
+# Clone custom nodes only — omitting all --pip-* flags tells cm-cli to skip pip installs.
+# Pip installs are handled entirely by uv sync below.
 COMFYUI_PATH="$COMFYUI_HOME" "$PYTHON_BIN" "$CM_CLI" restore-snapshot \
-  "$REPO/Comfy-Lock.yaml" \
-  --pip-non-url \
-  --pip-non-local-url
+  "$REPO/Comfy-Lock.yaml" || true
 
 enable_custom_node comfyui_essentials
 enable_custom_node comfyui-pytorch360convert
@@ -135,17 +130,9 @@ enable_custom_node was-node-suite-comfyui
 
 clone_or_checkout https://github.com/amanbagrecha/p2e.git "$P2E_LIB_DIR" "$P2E_COMMIT"
 
-uv pip install --python "$PYTHON_BIN" \
-  --reinstall-package torch \
-  --reinstall-package torchvision \
-  --reinstall-package torchaudio \
-  --reinstall-package triton \
-  --reinstall-package opencv-contrib-python \
-  -r "$REPO/pipeline-requirements.txt"
-uv pip install --python "$PYTHON_BIN" --no-deps \
-  simple-lama-inpainting==0.1.0 \
-  ultralytics==8.4.21 \
-  open-image-models==0.5.1
+# Single install step — all dependencies declared in pyproject.toml.
+# torch/torchvision/torchaudio come from the pytorch-cu128 index defined there.
+uv sync --python "$PYTHON_BIN" --no-install-project
 
 link_path "$MODELS_COMFYUI_DIR" "$COMFYUI_HOME/models"
 link_path "$REPO/p2e-local" "$COMFYUI_HOME/custom_nodes/p2e"

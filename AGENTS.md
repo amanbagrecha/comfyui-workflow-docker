@@ -2,6 +2,7 @@
 
 ## General Conventions
 - Always use `tmux` for long-running tasks such as model downloads, ComfyUI services, and multi-GPU runs.
+- On rented or new Vast machines, prefer cloning `main`, running `bash scripts/bootstrap.sh`, and passing env vars for AWS profiles, data sync, and pipeline inputs instead of inventing a separate startup flow.
 
 ## Purpose
 This repository runs a host-native 5-stage 360 panorama pipeline:
@@ -36,6 +37,8 @@ All Python dependencies are declared in `pyproject.toml` and pinned in `uv.lock`
 ## Main Entry Points
 - `setup_host_environment.sh`
   - Clones ComfyUI, ComfyUI-Manager, and custom nodes; runs `uv sync` from `pyproject.toml`
+- `scripts/bootstrap.sh`
+  - Installs `aws` and `opencode` only if missing, optionally syncs data, and then runs `run_multi_gpu_pipeline.sh`
 - `run_comfyui_cluster.sh`
   - Starts or reuses one ComfyUI tmux service per GPU
 - `run_multi_gpu_pipeline.sh`
@@ -69,6 +72,7 @@ Each per-GPU shard job performs the following stages:
 - `SRC`
 - `FINAL_OUTPUT_DIR`
 - `RUN_NAME`
+- `SKIP_HOST_BOOTSTRAP`
 - `GPU_IDS`
 - `MAX_GPUS`
 - `BASE_COMFY_PORT`
@@ -83,6 +87,10 @@ Each per-GPU shard job performs the following stages:
 - `POSTPROCESS_WORKERS`
 - `PRIVACY_WORKERS`
 - `STRICT_HARDLINK`
+- `AWS_UPLOAD_PROFILE`
+- `AWS_DOWNLOAD_PROFILE`
+- `DOWNLOAD_S3_URI`
+- `DOWNLOAD_DEST_DIR`
 
 ## Host-Side Paths
 - Source dataset: user-provided `SRC`
@@ -117,4 +125,15 @@ Run the full multi-GPU pipeline:
 SRC="/absolute/path/to/input_images" \
 FINAL_OUTPUT_DIR="/absolute/path/to/final_outputs" \
 ./run_multi_gpu_pipeline.sh
+```
+
+On a pre-baked Vast machine, run the bootstrap flow from tmux and let it jump straight into the pipeline:
+
+```bash
+AWS_DOWNLOAD_PROFILE=wasabi \
+DOWNLOAD_S3_URI="s3://bucket/path/" \
+DOWNLOAD_DEST_DIR="/workspace/data" \
+SRC="/workspace/data" \
+FINAL_OUTPUT_DIR="/workspace/final" \
+bash scripts/bootstrap.sh
 ```

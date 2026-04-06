@@ -21,6 +21,8 @@ Environment variables:
                             FINAL_OUTPUT_DIR/<RUN_NAME>/gpu<id>/
   STRICT_HARDLINK           Optional. 1 = fail when hardlink is not possible.
                             0 = allow copy fallback. Default: 1.
+  SKIP_HOST_BOOTSTRAP       Optional. 1 = assume the runtime is already baked
+                            into the machine and skip setup_host_environment.sh.
   DRY_RUN                   Optional. 1 = prepare/print plan only, no launches.
 EOF
 }
@@ -63,6 +65,7 @@ WORK_ROOT="${WORK_ROOT:-$REPO/tmp/multigpu/$RUN_NAME}"
 WAIT_POLL_SEC="${WAIT_POLL_SEC:-10}"
 DRY_RUN="${DRY_RUN:-0}"
 STRICT_HARDLINK="${STRICT_HARDLINK:-1}"
+SKIP_HOST_BOOTSTRAP="${SKIP_HOST_BOOTSTRAP:-0}"
 
 STOP_AFTER_STAGE="${STOP_AFTER_STAGE:-egoblur}"
 PIPELINE_HELPERS="$REPO/inpainting-workflow-master/pipeline_helpers.py"
@@ -212,6 +215,7 @@ validate_non_negative_int MAX_GPUS "$MAX_GPUS"
 validate_min_int WAIT_POLL_SEC "$WAIT_POLL_SEC" 1
 validate_flag STRICT_HARDLINK "$STRICT_HARDLINK"
 validate_flag DRY_RUN "$DRY_RUN"
+validate_flag SKIP_HOST_BOOTSTRAP "$SKIP_HOST_BOOTSTRAP"
 require_commands nvidia-smi tmux wget
 
 RUN_FULL="$REPO/run_full_pipeline.sh"
@@ -221,7 +225,7 @@ if [[ ! -x "$RUN_FULL" ]]; then
 fi
 
 RUN_BOOTSTRAP="$REPO/setup_host_environment.sh"
-if [[ ! -x "$RUN_BOOTSTRAP" ]]; then
+if [[ "$SKIP_HOST_BOOTSTRAP" != "1" && ! -x "$RUN_BOOTSTRAP" ]]; then
   echo "ERROR: setup_host_environment.sh not found or not executable at $RUN_BOOTSTRAP"
   exit 1
 fi
@@ -247,6 +251,7 @@ log_event \
   --param gpu_ids="$GPU_IDS_CSV" \
   --param stop_after_stage="$STOP_AFTER_STAGE" \
   --param strict_hardlink="$STRICT_HARDLINK" \
+  --param skip_host_bootstrap="$SKIP_HOST_BOOTSTRAP" \
   --param dry_run="$DRY_RUN" \
   --metric num_gpus="$NUM_GPUS" \
   --path log_file="$LOG_FILE" \
@@ -261,7 +266,7 @@ log_event \
 echo "RUN_NAME=$RUN_NAME SRC=$SRC GPU_IDS=${GPU_LIST[*]}"
 echo "WORK_ROOT=$WORK_ROOT STOP_AFTER_STAGE=$STOP_AFTER_STAGE DRY_RUN=$DRY_RUN"
 
-if [[ "$DRY_RUN" == "0" ]]; then
+if [[ "$DRY_RUN" == "0" && "$SKIP_HOST_BOOTSTRAP" != "1" ]]; then
   set_step bootstrap_host
   MODELS_ROOT="${MODELS_ROOT:-$REPO/models}" \
   MODELS_COMFYUI_DIR="${MODELS_COMFYUI_DIR:-${MODELS_ROOT:-$REPO/models}/comfyui}" \

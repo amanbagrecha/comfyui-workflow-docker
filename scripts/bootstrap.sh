@@ -33,6 +33,22 @@ linux_arch() {
   esac
 }
 
+ensure_command() {
+  local cmd="$1"
+  local pkg="$2"
+
+  if command -v "$cmd" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "$pkg"
+  fi
+
+  require_commands "$cmd"
+}
+
 install_aws_cli() {
   local arch tmp_dir install_args
 
@@ -40,7 +56,8 @@ install_aws_cli() {
     return 0
   fi
 
-  require_commands curl unzip
+  ensure_command curl curl
+  ensure_command unzip unzip
   arch="$(linux_arch)"
   tmp_dir="$(mktemp -d)"
   install_args=(--bin-dir "$HOME/.local/bin" --install-dir "$HOME/.local/aws-cli")
@@ -62,7 +79,7 @@ install_opencode() {
     return 0
   fi
 
-  require_commands curl
+  ensure_command curl curl
   curl -fsSL https://opencode.ai/install | bash
   require_commands opencode
 }

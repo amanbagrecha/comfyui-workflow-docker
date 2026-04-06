@@ -7,7 +7,7 @@ REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck disable=SC1091
 . "$REPO/scripts/shell_helpers.sh"
 
-export PATH="$HOME/.local/bin:$PATH"
+export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$PATH"
 
 INSTALL_AWS_CLI="${INSTALL_AWS_CLI:-1}"
 INSTALL_OPENCODE="${INSTALL_OPENCODE:-1}"
@@ -81,6 +81,7 @@ install_opencode() {
 
   ensure_command curl curl
   curl -fsSL https://opencode.ai/install | bash
+  export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$PATH"
   require_commands opencode
 }
 

@@ -7,7 +7,7 @@ REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck disable=SC1091
 . "$REPO/scripts/shell_helpers.sh"
 
-export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$PATH"
+export PATH="$HOME/.opencode/bin:$PATH"
 
 INSTALL_AWS_CLI="${INSTALL_AWS_CLI:-1}"
 INSTALL_OPENCODE="${INSTALL_OPENCODE:-1}"
@@ -52,7 +52,11 @@ ensure_command() {
 install_aws_cli() {
   local arch tmp_dir install_args
 
-  if [ "$INSTALL_AWS_CLI" != "1" ] || command -v aws >/dev/null 2>&1; then
+  if [ "$INSTALL_AWS_CLI" != "1" ]; then
+    return 0
+  fi
+
+  if [ -x "/usr/local/bin/aws" ]; then
     return 0
   fi
 
@@ -60,9 +64,9 @@ install_aws_cli() {
   ensure_command unzip unzip
   arch="$(linux_arch)"
   tmp_dir="$(mktemp -d)"
-  install_args=(--bin-dir "$HOME/.local/bin" --install-dir "$HOME/.local/aws-cli")
+  install_args=(--bin-dir "/usr/local/bin" --install-dir "/usr/local/aws-cli")
 
-  if [ -d "$HOME/.local/aws-cli" ]; then
+  if [ -d "/usr/local/aws-cli" ]; then
     install_args+=(--update)
   fi
 
@@ -75,13 +79,16 @@ install_aws_cli() {
 }
 
 install_opencode() {
-  if [ "$INSTALL_OPENCODE" != "1" ] || command -v opencode >/dev/null 2>&1; then
+  if [ "$INSTALL_OPENCODE" != "1" ]; then
     return 0
   fi
 
-  ensure_command curl curl
-  curl -fsSL https://opencode.ai/install | bash
-  export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$PATH"
+  if [ ! -x "$HOME/.opencode/bin/opencode" ]; then
+    ensure_command curl curl
+    curl -fsSL https://opencode.ai/install | bash
+  fi
+
+  ln -sf "$HOME/.opencode/bin/opencode" /usr/local/bin/opencode
   require_commands opencode
 }
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Model Download Script for ComfyUI Inpainting Pipeline
+# Model download script for the host-native pipeline
 # Downloads all required models from S3 first, then falls back to HTTP
 
 set -e  # Exit on error
@@ -204,6 +204,6 @@ echo "  ├── privacy_blur/"
 echo "  │   ├── face_yolov8n.pt"
 echo "  │   └── yolo-v9-s-608-license-plates-end2end.onnx"
 echo ""
-echo "You can now start the Docker container:"
-echo "  docker compose up -d"
+echo "Run the pipeline with:"
+echo "  SRC=/abs/path/to/images FINAL_OUTPUT_DIR=/abs/path/to/final ./run_multi_gpu_pipeline.sh"
 echo ""

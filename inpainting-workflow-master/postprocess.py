@@ -28,7 +28,7 @@ def _load_p2e_and_blend_torch():
         import importlib.util
 
         fallback_nodes = [
-            Path("/workspace/ComfyUI/custom_nodes/p2e/nodes.py"),
+            Path(__file__).resolve().parents[1] / "ComfyUI" / "custom_nodes" / "p2e" / "nodes.py",
             Path(__file__).resolve().parents[1] / "p2e-local" / "nodes.py",
         ]
         chosen_nodes = None

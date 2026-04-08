@@ -46,6 +46,12 @@ All Python dependencies are declared in `pyproject.toml` and pinned in `uv.lock`
 - `run_full_pipeline.sh`
   - Runs one shard end to end on one GPU
 
+## S3 Parallel Downloader
+For fast parallel downloads from S3, use `inpainting-workflow-master/s3_parallel_download.py`:
+```bash
+python inpainting-workflow-master/s3_parallel_download.py --bucket BUCKET --prefix PREFIX --dest DEST
+```
+
 ## ComfyUI Services
 `run_comfyui_cluster.sh` maps GPU ids to ports and per-GPU data roots:
 - GPU 0 -> `http://127.0.0.1:8180` -> `native_data/gpu0`

@@ -49,8 +49,12 @@ All Python dependencies are declared in `pyproject.toml` and pinned in `uv.lock`
 ## S3 Parallel Downloader
 For fast parallel downloads from S3, use `inpainting-workflow-master/s3_parallel_download.py`:
 ```bash
-python inpainting-workflow-master/s3_parallel_download.py --bucket BUCKET --prefix PREFIX --dest DEST
+python inpainting-workflow-master/s3_parallel_download.py \
+  --bucket BUCKET \
+  --prefix "prefix1/" "prefix2/" \
+  --dest DEST
 ```
+Pass `--prefix` as space-separated values. Each prefix downloads into its own subfolder. `--prefix` is required.
 
 ## ComfyUI Services
 `run_comfyui_cluster.sh` maps GPU ids to ports and per-GPU data roots:
@@ -128,10 +132,12 @@ Start ComfyUI services:
 Run the full multi-GPU pipeline:
 
 ```bash
+RUN_NAME="my-run" \
 SRC="/absolute/path/to/input_images" \
 FINAL_OUTPUT_DIR="/absolute/path/to/final_outputs" \
 ./run_multi_gpu_pipeline.sh
 ```
+`RUN_NAME` and `SRC` are required. `FINAL_OUTPUT_DIR` is optional.
 
 On a pre-baked Vast machine, run the bootstrap flow from tmux and let it jump straight into the pipeline:
 

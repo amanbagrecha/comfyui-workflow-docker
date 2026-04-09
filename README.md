@@ -6,5 +6,16 @@ For rented or snapshotted Vast machines, clone `main`, run `bash scripts/bootstr
 
 For fast S3 downloads, use `inpainting-workflow-master/s3_parallel_download.py`:
 ```bash
-python inpainting-workflow-master/s3_parallel_download.py --bucket BUCKET --prefix PREFIX --dest DEST
+python inpainting-workflow-master/s3_parallel_download.py \
+  --bucket BUCKET \
+  --prefix "prefix1/" "prefix2/" \
+  --dest DEST
+```
+
+Run the full multi-GPU pipeline:
+```bash
+RUN_NAME="my-run" \
+SRC="/absolute/path/to/input_images" \
+FINAL_OUTPUT_DIR="/absolute/path/to/final_outputs" \
+./run_multi_gpu_pipeline.sh
 ```

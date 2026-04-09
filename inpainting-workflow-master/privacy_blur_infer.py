@@ -263,7 +263,7 @@ def _process_chunk(packed: dict) -> tuple[list, list]:
 
     for image_path in image_paths:
         t0 = time.perf_counter()
-        blur_path = output_dir / f"{image_path.stem}_blur.jpg"
+        blur_path = output_dir / f"{image_path.stem}.jpg"
         annot_path = output_dir / f"{image_path.stem}_annot.jpg"
         if (
             blur_path.exists()

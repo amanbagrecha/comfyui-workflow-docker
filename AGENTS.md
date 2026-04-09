@@ -117,35 +117,60 @@ Each per-GPU shard job performs the following stages:
 - ComfyUI service logs: `logs/comfyui_g<gpu_id>.log`
 
 ## How To Run
-Host setup:
+
+### 1. Bootstrap (once per machine)
+Installs AWS CLI, uv, configures AWS profiles, installs OpenCode.
 
 ```bash
-./setup_host_environment.sh
+AWS_DOWNLOAD_PROFILE=wasabi \
+AWS_DOWNLOAD_ACCESS_KEY_ID=xxx \
+AWS_DOWNLOAD_SECRET_ACCESS_KEY=xxx \
+AWS_DOWNLOAD_REGION=us-east-1 \
+AWS_DOWNLOAD_ENDPOINT_URL=https://s3.wasabisys.com \
+AWS_UPLOAD_PROFILE=s3 \
+AWS_UPLOAD_ACCESS_KEY_ID=xxx \
+AWS_UPLOAD_SECRET_ACCESS_KEY=xxx \
+AWS_UPLOAD_REGION=us-east-1 \
+bash scripts/bootstrap.sh
 ```
 
-Start ComfyUI services:
+### 2. Orchestrate (single entry point)
+Downloads from Wasabi → runs pipeline → tars → uploads to S3 → deletes intermediates. Loops through all prefixes automatically.
 
 ```bash
-./run_comfyui_cluster.sh
+bash orchestrate.sh <run_id_1> <run_id_2> ...
 ```
 
-Run the full multi-GPU pipeline:
+**All overridable env vars:**
 
+| Var | Default | Description |
+|---|---|---|
+| `AWS_DOWNLOAD_PROFILE` | `wasabi` | Wasabi profile for input downloads |
+| `AWS_UPLOAD_PROFILE` | `s3` | S3 profile for tar uploads |
+| `WASABI_BUCKET` | `pano-bkp` | Source bucket on Wasabi |
+| `S3_UPLOAD_PATH` | `s3://aipanoexport-batch2/panoramic_clean` | Upload destination |
+| `S3_LOGS_PATH` | `s3://aipanoexport-batch2/logs/<hostname>` | Remote log destination — `<hostname>` is the machine's hostname, which on Vast.ai is a container ID (e.g. `08703c04a697`). Always override with a meaningful name. |
+| `EVERY_NTH` | `3` | Download every Nth file |
+| `DRY_RUN` | `0` | `1` = print plan only, no execution |
+
+**Examples:**
+```bash
+# Test run against a different bucket, every 10th file
+S3_UPLOAD_PATH=s3://my-test-bucket/test EVERY_NTH=10 DRY_RUN=1 \
+bash orchestrate.sh 1021231_123123
+
+# Production run, multiple sessions in tmux (always set S3_LOGS_PATH to identify the machine)
+S3_LOGS_PATH=s3://aipanoexport-batch2/logs/vast-node-1 \
+tmux new-session -d -s orch \
+  'bash orchestrate.sh 1021231_123123 1034567_789012 1098765_432109'
+tmux attach -t orch
+```
+
+### 3. Manual pipeline run (advanced)
 ```bash
 RUN_NAME="my-run" \
 SRC="/absolute/path/to/input_images" \
 FINAL_OUTPUT_DIR="/absolute/path/to/final_outputs" \
 ./run_multi_gpu_pipeline.sh
 ```
-`RUN_NAME` and `SRC` are required. `FINAL_OUTPUT_DIR` is optional.
-
-On a pre-baked Vast machine, run the bootstrap flow from tmux and let it jump straight into the pipeline:
-
-```bash
-AWS_DOWNLOAD_PROFILE=wasabi \
-DOWNLOAD_S3_URI="s3://bucket/path/" \
-DOWNLOAD_DEST_DIR="/workspace/data" \
-SRC="/workspace/data" \
-FINAL_OUTPUT_DIR="/workspace/final" \
-bash scripts/bootstrap.sh
-```
+Set `SKIP_HOST_BOOTSTRAP=1` if `setup_host_environment.sh` has already run.

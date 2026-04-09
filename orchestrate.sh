@@ -44,6 +44,16 @@ ORCH_LOG="$LOGS_DIR/orchestrator.log"
 STATUS_FILE="$LOGS_DIR/status.txt"
 FAILURES_FILE="$LOGS_DIR/failures.txt"
 
+# ── Logging ───────────────────────────────────────────────────────────────────
+log()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$ORCH_LOG"; }
+fail() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] FAIL: $*" | tee -a "$FAILURES_FILE" "$ORCH_LOG"; }
+status() { echo "$*" > "$STATUS_FILE"; log "STATUS: $*"; }
+
+sync_logs() {
+  aws --profile "$UPLOAD_PROFILE" s3 sync "$LOGS_DIR/" "$S3_LOGS_PATH/" \
+    --quiet --no-progress 2>/dev/null || true
+}
+
 # ── One-time host setup ───────────────────────────────────────────────────────
 # Runs setup_host_environment.sh once to ensure .venv, ComfyUI, and models are
 # in place. After this, all pipeline calls use SKIP_HOST_BOOTSTRAP=1 which is
@@ -60,16 +70,6 @@ if [[ ! -f "$SETUP_DONE_FLAG" ]]; then
 else
   log "Host already set up (found $SETUP_DONE_FLAG), skipping."
 fi
-
-# ── Logging ───────────────────────────────────────────────────────────────────
-log()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$ORCH_LOG"; }
-fail() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] FAIL: $*" | tee -a "$FAILURES_FILE" "$ORCH_LOG"; }
-status() { echo "$*" > "$STATUS_FILE"; log "STATUS: $*"; }
-
-sync_logs() {
-  aws --profile "$UPLOAD_PROFILE" s3 sync "$LOGS_DIR/" "$S3_LOGS_PATH/" \
-    --quiet --no-progress 2>/dev/null || true
-}
 
 # ── Derive folder name from prefix (prefix IS the run_id, e.g. 1021231_123123) ─
 prefix_to_name() {

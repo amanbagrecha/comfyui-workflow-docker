@@ -555,12 +555,10 @@ if [[ -n "${FINAL_OUTPUT_DIR:-}" ]]; then
 
   while IFS=$'\t' read -r gpu_id _ batch comfy_data_dir _ _ _ _ _ _; do
     src_dir="$(final_stage_dir "$comfy_data_dir" "$batch")"
-    dst_dir="$MERGED_ROOT/gpu${gpu_id}"
-    mkdir -p "$dst_dir"
 
-    "$PYTHON_BIN" "$PIPELINE_HELPERS" link-tree \
+    "$PYTHON_BIN" "$PIPELINE_HELPERS" link-flat \
       --src "$src_dir" \
-      --dst "$dst_dir" \
+      --dst "$MERGED_ROOT" \
       --strict-hardlink "$STRICT_HARDLINK"
   done < "$LAUNCH_PLAN"
 

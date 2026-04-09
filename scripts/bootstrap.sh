@@ -6,13 +6,12 @@ REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # shellcheck disable=SC1091
 . "$REPO/scripts/shell_helpers.sh"
+. "$REPO/scripts/runtime.sh"
 
-export PATH="$HOME/.opencode/bin:$PATH"
+export PATH="$HOME/.local/bin:$HOME/.opencode/bin:$PATH"
 
 INSTALL_AWS_CLI="${INSTALL_AWS_CLI:-1}"
 INSTALL_OPENCODE="${INSTALL_OPENCODE:-1}"
-DOWNLOAD_SIZE_ONLY="${DOWNLOAD_SIZE_ONLY:-0}"
-RUN_PIPELINE="${RUN_PIPELINE:-1}"
 
 require_env() {
   local name="$1"
@@ -127,47 +126,12 @@ configure_profile() {
   fi
 }
 
-download_data() {
-  local profile sync_args
-
-  if [ -z "${DOWNLOAD_S3_URI:-}" ]; then
-    return 0
-  fi
-
-  require_commands aws
-  require_env DOWNLOAD_DEST_DIR
-
-  profile="${AWS_DOWNLOAD_PROFILE:-default}"
-  sync_args=(s3 sync "$DOWNLOAD_S3_URI" "$DOWNLOAD_DEST_DIR" --profile "$profile" --no-progress)
-
-  if [ -n "${AWS_DOWNLOAD_ENDPOINT_URL:-}" ]; then
-    sync_args+=(--endpoint-url "$AWS_DOWNLOAD_ENDPOINT_URL")
-  fi
-
-  if [ "$DOWNLOAD_SIZE_ONLY" = "1" ]; then
-    sync_args+=(--size-only)
-  fi
-
-  mkdir -p "$DOWNLOAD_DEST_DIR"
-  aws "${sync_args[@]}"
-}
-
-run_pipeline() {
-  if [ "$RUN_PIPELINE" != "1" ]; then
-    return 0
-  fi
-
-  require_env SRC
-  SKIP_HOST_BOOTSTRAP="${SKIP_HOST_BOOTSTRAP:-1}" bash "$REPO/run_multi_gpu_pipeline.sh"
-}
-
 main() {
   install_aws_cli
+  ensure_uv
   configure_profile AWS_UPLOAD upload
   configure_profile AWS_DOWNLOAD download
   install_opencode
-  download_data
-  run_pipeline
 }
 
 main "$@"

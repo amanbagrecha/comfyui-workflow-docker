@@ -27,7 +27,7 @@ PRIVACY_MODELS_DIR="${PRIVACY_MODELS_DIR:-$MODELS_ROOT/privacy_blur}"
 S3_MODELS_ROOT="${S3_MODELS_ROOT:-s3://panaromic-images/pano_models}"
 # Profile used for all S3 model downloads. Defaults to 'upload' which is
 # configured by bootstrap.sh. Override with AWS_MODELS_PROFILE=<profile>.
-AWS_MODELS_PROFILE="${AWS_MODELS_PROFILE:-upload}"
+AWS_MODELS_PROFILE="${AWS_MODELS_PROFILE:-s3}"
 S3_DOWNLOADS_ENABLED=0
 
 relative_model_path() {

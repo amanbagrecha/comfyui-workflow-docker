@@ -21,7 +21,7 @@ set -uo pipefail
 
 # ── Config ────────────────────────────────────────────────────────────────────
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DOWNLOAD_PROFILE="${AWS_DOWNLOAD_PROFILE:-download}"
+DOWNLOAD_PROFILE="${AWS_DOWNLOAD_PROFILE:-wasabi}"
 UPLOAD_PROFILE="${AWS_UPLOAD_PROFILE:-s3}"
 WASABI_BUCKET="${WASABI_BUCKET:-pano-bkp}"
 S3_UPLOAD_PATH="${S3_UPLOAD_PATH:-s3://aipanoexport-batch2/panoramic_clean}"

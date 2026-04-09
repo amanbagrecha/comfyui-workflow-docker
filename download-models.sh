@@ -87,7 +87,7 @@ download_model() {
             relative_path="$(relative_model_path "$output_path")"
             s3_url="${S3_MODELS_ROOT%/}/$relative_path"
             echo "  Trying S3: $s3_url"
-            if aws s3 cp --only-show-errors --profile "$AWS_MODELS_PROFILE" "$s3_url" "$output_path"; then
+            if aws s3 cp --profile "$AWS_MODELS_PROFILE" "$s3_url" "$output_path"; then
                 downloaded=1
                 echo "✓ Downloaded successfully from S3"
             else

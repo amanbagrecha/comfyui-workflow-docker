@@ -14,7 +14,7 @@
 # Optional:
 #   WASABI_BUCKET         — Source bucket (default: pano-bkp)
 #   S3_UPLOAD_PATH        — Upload destination (default: s3://aipanoexport-batch2/panoramic_clean)
-#   EVERY_NTH             — Download every Nth file (default: 1 = all files)
+#   EVERY_NTH             — Download every Nth file (default: 3)
 #   DRY_RUN               — Set to 1 to print plan without executing
 
 set -uo pipefail
@@ -229,10 +229,12 @@ for i in "${!PREFIXES[@]}"; do
   log "Launching tmux session: run_${run_name}"
 
   tmux new-session -d -s "run_${run_name}" \
-    "RUN_NAME=${run_name} \
+    "set -o pipefail; \
+     SKIP_HOST_BOOTSTRAP=1 \
+     RUN_NAME=${run_name} \
      SRC=${src_dir} \
      FINAL_OUTPUT_DIR=${OUTPUTS_DIR} \
-     bash ${PIPELINE} 2>&1 | tee ${run_log}
+     bash ${PIPELINE} 2>&1 | tee ${run_log}; \
      echo \$? > ${rc_file}"
 
   # Background waiter: resolves when tmux session exits

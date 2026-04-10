@@ -50,7 +50,9 @@ fail() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] FAIL: $*" | tee -a "$FAILURES_FILE
 status() { echo "$*" > "$STATUS_FILE"; log "STATUS: $*"; }
 
 sync_logs() {
-  aws --profile "$UPLOAD_PROFILE" s3 sync "$LOGS_DIR/" "$S3_LOGS_PATH/" \
+  aws --profile "$UPLOAD_PROFILE" s3 sync "$LOGS_DIR/" "$S3_LOGS_PATH/orchestrate/" \
+    --quiet --no-progress 2>/dev/null || true
+  aws --profile "$UPLOAD_PROFILE" s3 sync "$REPO/logs/" "$S3_LOGS_PATH/pipeline/" \
     --quiet --no-progress 2>/dev/null || true
 }
 

@@ -199,6 +199,12 @@ for i in "${!PREFIXES[@]}"; do
     continue
   fi
 
+  # ── Skip if already uploaded to S3 ────────────────────────────────────────
+  if aws --profile "$UPLOAD_PROFILE" s3 ls "$S3_UPLOAD_PATH/${run_name}.tar" > /dev/null 2>&1; then
+    log "[$n/$total] SKIP $run_name — already on S3"
+    continue
+  fi
+
   # ── Download current batch ─────────────────────────────────────────────────
   dl_log="$LOGS_DIR/download_${run_name}.log"
   if ! download_prefix "$prefix" "$src_dir" "$dl_log"; then

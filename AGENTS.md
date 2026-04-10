@@ -116,6 +116,20 @@ Each per-GPU shard job performs the following stages:
 - Per-shard logs: `logs/fullrun_<RUN_NAME>_g<gpu_id>.log` and `logs/fullrun_<RUN_NAME>_g<gpu_id>.events.jsonl`
 - ComfyUI service logs: `logs/comfyui_g<gpu_id>.log`
 
+## Checking Logs
+```bash
+# Live orchestrator status (upload progress, current sequence, failures)
+tmux attach -t orch-next
+# or tail the log directly:
+grep -E "STATUS|OK|FAIL|Uploading|Tarring" /workspace/logs/orchestrator/orchestrator.log | tail -20
+
+# Live GPU run progress
+tmux attach -t run_<RUN_NAME>
+
+# Check which tars uploaded vs. pending
+grep -E "Upload verified|FAIL" /workspace/logs/orchestrator/orchestrator.log
+```
+
 ## How To Run
 
 ### 1. Bootstrap (once per machine)

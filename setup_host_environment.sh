@@ -107,6 +107,38 @@ enable_custom_node() {
   fi
 }
 
+list_cnr_custom_nodes() {
+  LOCK_PATH="$REPO/Comfy-Lock.yaml" "$PYTHON_BIN" - <<'PY'
+from pathlib import Path
+import os
+
+import yaml
+
+lock_path = Path(os.environ["LOCK_PATH"])
+data = yaml.safe_load(lock_path.read_text()) or {}
+custom_nodes = data.get("custom_nodes", {})
+for name in custom_nodes.get("cnr_custom_nodes", {}):
+    print(name)
+PY
+}
+
+ensure_cnr_custom_node() {
+  local name="$1"
+  local active_dir="$COMFYUI_HOME/custom_nodes/$name"
+  local disabled_dir="$COMFYUI_HOME/custom_nodes/.disabled/$name"
+
+  if [ ! -d "$active_dir" ] && [ ! -d "$disabled_dir" ]; then
+    COMFYUI_PATH="$COMFYUI_HOME" "$PYTHON_BIN" "$CM_CLI" install --no-deps "$name"
+  fi
+
+  enable_custom_node "$name"
+
+  if [ ! -d "$active_dir" ]; then
+    echo "ERROR: required custom node '$name' is not installed"
+    exit 1
+  fi
+}
+
 install_system_packages
 require_commands git
 
@@ -118,21 +150,22 @@ CM_CLI="$COMFYUI_HOME/custom_nodes/ComfyUI-Manager/cm-cli.py"
 clone_or_checkout https://github.com/comfyanonymous/ComfyUI "$COMFYUI_HOME" "$COMFYUI_COMMIT"
 clone_or_checkout https://github.com/ltdrdata/ComfyUI-Manager "$COMFYUI_HOME/custom_nodes/ComfyUI-Manager" "$COMFYUI_MANAGER_COMMIT"
 
-# Clone custom nodes only — omitting all --pip-* flags tells cm-cli to skip pip installs.
-# Pip installs are handled entirely by uv sync below.
+# Install Python dependencies before invoking cm-cli; ComfyUI-Manager's CLI
+# imports typer and other packages from the repo venv.
+uv sync --python "$PYTHON_BIN" --no-install-project
+
+# Best-effort snapshot restore for ComfyUI-Manager state.
+# Pip installs are handled entirely by uv sync above, so we keep --no-deps
+# when we explicitly ensure required CNR nodes after this step.
 COMFYUI_PATH="$COMFYUI_HOME" "$PYTHON_BIN" "$CM_CLI" restore-snapshot \
   "$REPO/Comfy-Lock.yaml" || true
 
-enable_custom_node comfyui_essentials
-enable_custom_node comfyui-pytorch360convert
-enable_custom_node comfyui_layerstyle
-enable_custom_node was-node-suite-comfyui
+while IFS= read -r cnr_node; do
+  [ -n "$cnr_node" ] || continue
+  ensure_cnr_custom_node "$cnr_node"
+done < <(list_cnr_custom_nodes)
 
 clone_or_checkout https://github.com/amanbagrecha/p2e.git "$P2E_LIB_DIR" "$P2E_COMMIT"
-
-# Single install step — all dependencies declared in pyproject.toml.
-# torch/torchvision/torchaudio come from the pytorch-cu128 index defined there.
-uv sync --python "$PYTHON_BIN" --no-install-project
 
 link_path "$MODELS_COMFYUI_DIR" "$COMFYUI_HOME/models"
 link_path "$REPO/p2e-local" "$COMFYUI_HOME/custom_nodes/p2e"

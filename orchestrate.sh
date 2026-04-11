@@ -43,11 +43,20 @@ mkdir -p "$LOGS_DIR" "$TARS_DIR" "$OUTPUTS_DIR"
 ORCH_LOG="$LOGS_DIR/orchestrator.log"
 STATUS_FILE="$LOGS_DIR/status.txt"
 FAILURES_FILE="$LOGS_DIR/failures.txt"
+RUN_STATE_DIR="$LOGS_DIR/run_states"
+
+mkdir -p "$RUN_STATE_DIR"
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 log()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$ORCH_LOG"; }
 fail() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] FAIL: $*" | tee -a "$FAILURES_FILE" "$ORCH_LOG"; }
 status() { echo "$*" > "$STATUS_FILE"; log "STATUS: $*"; }
+set_run_state() {
+  local run_name="$1"
+  local run_state="$2"
+  printf '%s\n' "$run_state" > "$RUN_STATE_DIR/${run_name}.txt"
+  log "RUN_STATE[$run_name]: $run_state"
+}
 
 sync_logs() {
   aws --profile "$UPLOAD_PROFILE" s3 sync "$LOGS_DIR/" "$S3_LOGS_PATH/orchestrate/" \
@@ -118,11 +127,13 @@ tar_upload_cleanup() {
 
   # 2. Check if already on S3
   if aws --profile "$UPLOAD_PROFILE" s3 ls "$s3dest" > /dev/null 2>&1; then
+    set_run_state "$run_name" "already_uploaded"
     log "[$run_name] Already on S3, skipping upload"
   else
     log "[$run_name] Uploading to $s3dest..."
     if ! aws --profile "$UPLOAD_PROFILE" s3 cp "$tar_file" "$s3dest" \
         2>&1 | tee -a "$ORCH_LOG"; then
+      set_run_state "$run_name" "upload_failed"
       fail "[$run_name] Upload failed"
       return 1
     fi
@@ -134,6 +145,7 @@ tar_upload_cleanup() {
   local_size=$(stat -c%s "$tar_file")
 
   if [[ "$s3_size" != "$local_size" ]]; then
+    set_run_state "$run_name" "upload_failed"
     fail "[$run_name] Size mismatch — local=$local_size s3=$s3_size. NOT deleting."
     return 1
   fi
@@ -166,6 +178,7 @@ tar_upload_cleanup() {
 
   # Tar: confirmed on S3, safe to delete
   rm -f "$tar_file"
+  set_run_state "$run_name" "completed"
   log "[$run_name] Cleanup complete. Disk free: $(df -h /workspace | awk 'NR==2{print $4}')"
 }
 
@@ -203,6 +216,7 @@ for i in "${!PREFIXES[@]}"; do
 
   # ── Skip if already uploaded to S3 ────────────────────────────────────────
   if aws --profile "$UPLOAD_PROFILE" s3 ls "$S3_UPLOAD_PATH/${run_name}.tar" > /dev/null 2>&1; then
+    set_run_state "$run_name" "already_uploaded"
     log "[$n/$total] SKIP $run_name — already on S3"
     continue
   fi
@@ -210,10 +224,12 @@ for i in "${!PREFIXES[@]}"; do
   # ── Download current batch ─────────────────────────────────────────────────
   dl_log="$LOGS_DIR/download_${run_name}.log"
   if ! download_prefix "$prefix" "$src_dir" "$dl_log"; then
+    set_run_state "$run_name" "download_failed"
     fail "Download failed: $prefix"
     sync_logs
     continue
   fi
+  set_run_state "$run_name" "downloaded"
   log "[$n/$total] Download complete: $run_name ($(ls "$src_dir" | wc -l) files)"
 
   # ── Wait for previous run to finish before launching new one ──────────────
@@ -222,9 +238,14 @@ for i in "${!PREFIXES[@]}"; do
     prev_name="${RUN_NAMES[-1]}"
     status "[$n/$total] Waiting for run $prev_name..."
     if wait "$prev_pid"; then
+      set_run_state "$prev_name" "pipeline_succeeded"
       log "Run finished: $prev_name"
-      tar_upload_cleanup "$prev_name" || fail "tar/upload/cleanup failed: $prev_name"
+      tar_upload_cleanup "$prev_name" || {
+        set_run_state "$prev_name" "upload_failed"
+        fail "tar/upload/cleanup failed: $prev_name"
+      }
     else
+      set_run_state "$prev_name" "pipeline_failed"
       fail "Pipeline failed: $prev_name (rc=$?)"
     fi
     sync_logs
@@ -233,7 +254,9 @@ for i in "${!PREFIXES[@]}"; do
   # ── Launch GPU run in its own tmux session ────────────────────────────────
   run_log="$LOGS_DIR/run_${run_name}.log"
   rc_file="$LOGS_DIR/rc_${run_name}.txt"
+  state_file="$RUN_STATE_DIR/${run_name}.txt"
   status "[$n/$total] Running $run_name"
+  set_run_state "$run_name" "running"
   log "Launching tmux session: run_${run_name}"
 
   tmux new-session -d -s "run_${run_name}" \
@@ -243,7 +266,9 @@ for i in "${!PREFIXES[@]}"; do
      SRC=${src_dir} \
      FINAL_OUTPUT_DIR=${OUTPUTS_DIR} \
      bash ${PIPELINE} 2>&1 | tee ${run_log}; \
-     echo \$? > ${rc_file}"
+      rc=\$?; \
+      echo \$rc > ${rc_file}; \
+      if [ \$rc -eq 0 ]; then printf '%s\\n' pipeline_succeeded > ${state_file}; else printf '%s\\n' pipeline_failed > ${state_file}; fi"
 
   # Background waiter: resolves when tmux session exits
   (
@@ -261,9 +286,14 @@ if [[ ${#RUN_PIDS[@]} -gt 0 ]]; then
   last_name="${RUN_NAMES[-1]}"
   status "Waiting for final run: $last_name"
   if wait "$last_pid"; then
+    set_run_state "$last_name" "pipeline_succeeded"
     log "Run finished: $last_name"
-    tar_upload_cleanup "$last_name" || fail "tar/upload/cleanup failed: $last_name"
+    tar_upload_cleanup "$last_name" || {
+      set_run_state "$last_name" "upload_failed"
+      fail "tar/upload/cleanup failed: $last_name"
+    }
   else
+    set_run_state "$last_name" "pipeline_failed"
     fail "Pipeline failed: $last_name (rc=$?)"
   fi
 fi

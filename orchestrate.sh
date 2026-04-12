@@ -16,6 +16,10 @@
 #   S3_UPLOAD_PATH        — Upload destination (default: s3://aipanoexport-batch2/panoramic_clean)
 #   EVERY_NTH             — Download every Nth file (default: 3)
 #   DRY_RUN               — Set to 1 to print plan without executing
+#
+# Per-run structured state is emitted to:
+#   $REPO/logs/orchestrate_<run_name>.events.jsonl
+# which the vast_controller polls over SSH to populate the run_events table.
 
 set -uo pipefail
 
@@ -35,28 +39,18 @@ TARS_DIR="/workspace/tars"
 NATIVE_DATA="$REPO/native_data"
 TMP_DIR="$REPO/tmp/multigpu"
 LOGS_DIR="/workspace/logs/orchestrator"
+EVENTS_ROOT="$REPO/logs"
 PIPELINE="$REPO/run_multi_gpu_pipeline.sh"
+PIPELINE_HELPERS="$REPO/inpainting-workflow-master/pipeline_helpers.py"
 DOWNLOADER="$REPO/inpainting-workflow-master/s3_parallel_download.py"
 
-mkdir -p "$LOGS_DIR" "$TARS_DIR" "$OUTPUTS_DIR"
+mkdir -p "$LOGS_DIR" "$TARS_DIR" "$OUTPUTS_DIR" "$EVENTS_ROOT"
 
 ORCH_LOG="$LOGS_DIR/orchestrator.log"
-STATUS_FILE="$LOGS_DIR/status.txt"
-FAILURES_FILE="$LOGS_DIR/failures.txt"
-RUN_STATE_DIR="$LOGS_DIR/run_states"
 
-mkdir -p "$RUN_STATE_DIR"
-
-# ── Logging ───────────────────────────────────────────────────────────────────
+# ── Logging (orchestrator.log = human scrollback) ─────────────────────────────
 log()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$ORCH_LOG"; }
-fail() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] FAIL: $*" | tee -a "$FAILURES_FILE" "$ORCH_LOG"; }
-status() { echo "$*" > "$STATUS_FILE"; log "STATUS: $*"; }
-set_run_state() {
-  local run_name="$1"
-  local run_state="$2"
-  printf '%s\n' "$run_state" > "$RUN_STATE_DIR/${run_name}.txt"
-  log "RUN_STATE[$run_name]: $run_state"
-}
+fail() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] FAIL: $*" | tee -a "$ORCH_LOG"; }
 
 sync_logs() {
   aws --profile "$UPLOAD_PROFILE" s3 sync "$LOGS_DIR/" "$S3_LOGS_PATH/orchestrate/" \
@@ -81,6 +75,50 @@ if [[ ! -f "$SETUP_DONE_FLAG" ]]; then
 else
   log "Host already set up (found $SETUP_DONE_FLAG), skipping."
 fi
+
+# ── Resolve PYTHON_BIN now that .venv exists ──────────────────────────────────
+# shellcheck disable=SC1091
+. "$REPO/scripts/runtime.sh"
+require_repo_python
+
+# ── Structured event emission ─────────────────────────────────────────────────
+# Per-run events file: $EVENTS_ROOT/orchestrate_<run_name>.events.jsonl
+# Each call appends one JSON line via pipeline_helpers.py append-event.
+emit_event() {
+  # Usage: emit_event <run_name> <--event E> <--status S> [extra append-event args...]
+  local run_name="$1"
+  shift
+  local events_file="$EVENTS_ROOT/orchestrate_${run_name}.events.jsonl"
+  "$PYTHON_BIN" "$PIPELINE_HELPERS" append-event \
+    --file "$events_file" \
+    --run-type orchestrate \
+    --run-id "$run_name" \
+    --script orchestrate.sh \
+    "$@" >/dev/null 2>&1 || true
+}
+
+declare -gA STAGE_STARTED=()
+stage_start() {
+  # Usage: stage_start <run_name> <stage>
+  local run_name="$1" stage="$2"
+  STAGE_STARTED["${run_name}:${stage}"]=$(date +%s)
+  emit_event "$run_name" --event stage_start --status running --stage "$stage"
+}
+
+stage_end() {
+  # Usage: stage_end <run_name> <stage> <success|failure> [extra append-event args...]
+  local run_name="$1" stage="$2" status="$3"
+  shift 3
+  local key="${run_name}:${stage}"
+  local started="${STAGE_STARTED[$key]:-0}"
+  local elapsed=0
+  if [[ "$started" -gt 0 ]]; then
+    elapsed=$(( $(date +%s) - started ))
+  fi
+  unset 'STAGE_STARTED[$key]'
+  emit_event "$run_name" --event stage_end --status "$status" --stage "$stage" \
+    --elapsed-sec "$elapsed" "$@"
+}
 
 # ── Derive folder name from prefix (prefix IS the run_id, e.g. 1021231_123123) ─
 prefix_to_name() {
@@ -110,6 +148,8 @@ download_prefix() {
 }
 
 # ── Tar, upload, verify, then delete everything ───────────────────────────────
+# Emits tar / upload / verify / cleanup stage events. Returns 0 on full success,
+# nonzero on any stage failure (caller decides run_end status).
 tar_upload_cleanup() {
   local run_name="$1"
   local src_dir="$IMGS_DIR/$run_name"
@@ -118,40 +158,56 @@ tar_upload_cleanup() {
   local s3dest="$S3_UPLOAD_PATH/${run_name}.tar"
 
   # 1. Tar
+  stage_start "$run_name" tar
   log "[$run_name] Tarring output..."
   if ! tar -cf "$tar_file" -C "$OUTPUTS_DIR" "$run_name" 2>&1 | tee -a "$ORCH_LOG"; then
+    stage_end "$run_name" tar failure --error "tar -cf failed"
     fail "[$run_name] Tar failed"
     return 1
   fi
+  local tar_bytes
+  tar_bytes=$(stat -c%s "$tar_file" 2>/dev/null || echo 0)
   log "[$run_name] Tar done: $(du -sh "$tar_file" | cut -f1)"
+  stage_end "$run_name" tar success --metric tar_bytes="$tar_bytes"
 
-  # 2. Check if already on S3
+  # 2. Upload (skipped if already on S3)
+  stage_start "$run_name" upload
+  local upload_skipped=0
   if aws --profile "$UPLOAD_PROFILE" s3 ls "$s3dest" > /dev/null 2>&1; then
-    set_run_state "$run_name" "already_uploaded"
+    upload_skipped=1
     log "[$run_name] Already on S3, skipping upload"
   else
     log "[$run_name] Uploading to $s3dest..."
     if ! aws --profile "$UPLOAD_PROFILE" s3 cp "$tar_file" "$s3dest" \
         2>&1 | tee -a "$ORCH_LOG"; then
-      set_run_state "$run_name" "upload_failed"
+      stage_end "$run_name" upload failure --error "aws s3 cp failed"
       fail "[$run_name] Upload failed"
       return 1
     fi
   fi
+  if [[ "$upload_skipped" -eq 1 ]]; then
+    stage_end "$run_name" upload success --reason already_on_s3
+  else
+    stage_end "$run_name" upload success --metric upload_bytes="$tar_bytes"
+  fi
 
   # 3. Verify: compare sizes
+  stage_start "$run_name" verify
   local s3_size local_size
   s3_size=$(aws --profile "$UPLOAD_PROFILE" s3 ls "$s3dest" | awk '{print $3}')
   local_size=$(stat -c%s "$tar_file")
 
   if [[ "$s3_size" != "$local_size" ]]; then
-    set_run_state "$run_name" "upload_failed"
+    stage_end "$run_name" verify failure \
+      --error "size mismatch local=$local_size s3=$s3_size"
     fail "[$run_name] Size mismatch — local=$local_size s3=$s3_size. NOT deleting."
     return 1
   fi
   log "[$run_name] Upload verified ($local_size bytes). Starting cleanup..."
+  stage_end "$run_name" verify success --metric verified_bytes="$local_size"
 
   # 4. Cleanup — order respects hardlink chains (most space freed first)
+  stage_start "$run_name" cleanup
 
   # Intermediates: unique inodes, safe to delete independently
   log "[$run_name] Deleting intermediates..."
@@ -178,8 +234,31 @@ tar_upload_cleanup() {
 
   # Tar: confirmed on S3, safe to delete
   rm -f "$tar_file"
-  set_run_state "$run_name" "completed"
+  stage_end "$run_name" cleanup success
   log "[$run_name] Cleanup complete. Disk free: $(df -h /workspace | awk 'NR==2{print $4}')"
+}
+
+# Wait for a launched pipeline to finish, then run finalize stages.
+# Called from both the main loop (previous run) and the tail block (last run).
+finalize_previous_run() {
+  local prev_pid="$1" prev_name="$2"
+  if wait "$prev_pid"; then
+    stage_end "$prev_name" pipeline success
+    log "Run finished: $prev_name"
+    if tar_upload_cleanup "$prev_name"; then
+      emit_event "$prev_name" --event run_end --status success
+    else
+      emit_event "$prev_name" --event run_end --status failure \
+        --error "tar_upload_cleanup failed"
+      fail "tar/upload/cleanup failed: $prev_name"
+    fi
+  else
+    local rc=$?
+    stage_end "$prev_name" pipeline failure --exit-code "$rc"
+    emit_event "$prev_name" --event run_end --status failure --exit-code "$rc"
+    fail "Pipeline failed: $prev_name (rc=$rc)"
+  fi
+  sync_logs
 }
 
 # ── Main orchestration loop ───────────────────────────────────────────────────
@@ -205,8 +284,6 @@ for i in "${!PREFIXES[@]}"; do
   n=$((i + 1))
   total=${#PREFIXES[@]}
 
-  status "[$n/$total] Downloading $run_name"
-
   if [[ "$DRY_RUN" == "1" ]]; then
     log "DRY: download s3://$WASABI_BUCKET/$prefix -> $src_dir"
     log "DRY: launch tmux run_${run_name}"
@@ -214,50 +291,48 @@ for i in "${!PREFIXES[@]}"; do
     continue
   fi
 
+  emit_event "$run_name" --event run_start --status running \
+    --param prefix="$prefix" \
+    --param bucket="$WASABI_BUCKET" \
+    --param s3_upload_path="$S3_UPLOAD_PATH" \
+    --param every_nth="$EVERY_NTH" \
+    --param position="$n/$total"
+
   # ── Skip if already uploaded to S3 ────────────────────────────────────────
   if aws --profile "$UPLOAD_PROFILE" s3 ls "$S3_UPLOAD_PATH/${run_name}.tar" > /dev/null 2>&1; then
-    set_run_state "$run_name" "already_uploaded"
     log "[$n/$total] SKIP $run_name — already on S3"
+    emit_event "$run_name" --event run_end --status success --reason already_on_s3
     continue
   fi
 
   # ── Download current batch ─────────────────────────────────────────────────
   dl_log="$LOGS_DIR/download_${run_name}.log"
+  stage_start "$run_name" download
   if ! download_prefix "$prefix" "$src_dir" "$dl_log"; then
-    set_run_state "$run_name" "download_failed"
+    stage_end "$run_name" download failure --error "s3_parallel_download.py failed"
+    emit_event "$run_name" --event run_end --status failure \
+      --error "download failed"
     fail "Download failed: $prefix"
     sync_logs
     continue
   fi
-  set_run_state "$run_name" "downloaded"
-  log "[$n/$total] Download complete: $run_name ($(ls "$src_dir" | wc -l) files)"
+  dl_count=$(ls "$src_dir" 2>/dev/null | wc -l)
+  stage_end "$run_name" download success --metric input_count="$dl_count"
+  log "[$n/$total] Download complete: $run_name ($dl_count files)"
 
   # ── Wait for previous run to finish before launching new one ──────────────
   if [[ ${#RUN_PIDS[@]} -gt 0 ]]; then
     prev_pid="${RUN_PIDS[-1]}"
     prev_name="${RUN_NAMES[-1]}"
-    status "[$n/$total] Waiting for run $prev_name..."
-    if wait "$prev_pid"; then
-      set_run_state "$prev_name" "pipeline_succeeded"
-      log "Run finished: $prev_name"
-      tar_upload_cleanup "$prev_name" || {
-        set_run_state "$prev_name" "upload_failed"
-        fail "tar/upload/cleanup failed: $prev_name"
-      }
-    else
-      set_run_state "$prev_name" "pipeline_failed"
-      fail "Pipeline failed: $prev_name (rc=$?)"
-    fi
-    sync_logs
+    log "[$n/$total] Waiting for run $prev_name..."
+    finalize_previous_run "$prev_pid" "$prev_name"
   fi
 
   # ── Launch GPU run in its own tmux session ────────────────────────────────
   run_log="$LOGS_DIR/run_${run_name}.log"
   rc_file="$LOGS_DIR/rc_${run_name}.txt"
-  state_file="$RUN_STATE_DIR/${run_name}.txt"
-  status "[$n/$total] Running $run_name"
-  set_run_state "$run_name" "running"
   log "Launching tmux session: run_${run_name}"
+  stage_start "$run_name" pipeline
 
   tmux new-session -d -s "run_${run_name}" \
     "set -o pipefail; \
@@ -266,9 +341,7 @@ for i in "${!PREFIXES[@]}"; do
      SRC=${src_dir} \
      FINAL_OUTPUT_DIR=${OUTPUTS_DIR} \
      bash ${PIPELINE} 2>&1 | tee ${run_log}; \
-      rc=\$?; \
-      echo \$rc > ${rc_file}; \
-      if [ \$rc -eq 0 ]; then printf '%s\\n' pipeline_succeeded > ${state_file}; else printf '%s\\n' pipeline_failed > ${state_file}; fi"
+     echo \$? > ${rc_file}"
 
   # Background waiter: resolves when tmux session exits
   (
@@ -284,28 +357,12 @@ done
 if [[ ${#RUN_PIDS[@]} -gt 0 ]]; then
   last_pid="${RUN_PIDS[-1]}"
   last_name="${RUN_NAMES[-1]}"
-  status "Waiting for final run: $last_name"
-  if wait "$last_pid"; then
-    set_run_state "$last_name" "pipeline_succeeded"
-    log "Run finished: $last_name"
-    tar_upload_cleanup "$last_name" || {
-      set_run_state "$last_name" "upload_failed"
-      fail "tar/upload/cleanup failed: $last_name"
-    }
-  else
-    set_run_state "$last_name" "pipeline_failed"
-    fail "Pipeline failed: $last_name (rc=$?)"
-  fi
+  log "Waiting for final run: $last_name"
+  finalize_previous_run "$last_pid" "$last_name"
 fi
 
 # ── Final summary ─────────────────────────────────────────────────────────────
 log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 log "All batches complete."
-if [[ -s "$FAILURES_FILE" ]]; then
-  log "FAILURES:"
-  cat "$FAILURES_FILE" | tee -a "$ORCH_LOG"
-else
-  log "No failures."
-fi
 log "Disk free: $(df -h /workspace | awk 'NR==2{print $4}')"
 sync_logs

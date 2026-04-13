@@ -345,7 +345,7 @@ for i in "${!PREFIXES[@]}"; do
 
   # Background waiter: resolves when tmux session exits
   (
-    while tmux has-session -t "run_${run_name}" 2>/dev/null; do sleep 100; done
+    while tmux has-session -t "run_${run_name}" 2>/dev/null; do sleep 20; done
     rc=$(cat "$rc_file" 2>/dev/null || echo 1)
     exit "$rc"
   ) &

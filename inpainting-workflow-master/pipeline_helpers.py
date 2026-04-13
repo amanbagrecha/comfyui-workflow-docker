@@ -14,6 +14,24 @@ from pathlib import Path
 
 BASE_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
 
+JPEG_SOI = b"\xff\xd8\xff"
+PNG_SOI = b"\x89PNG"
+
+
+def is_valid_image(file_path: Path) -> bool:
+    try:
+        with open(file_path, "rb") as f:
+            header = f.read(3)
+            if header == JPEG_SOI:
+                return True
+            if header == PNG_SOI[:3]:
+                return True
+            if file_path.suffix.lower() in (".webp", ".tif", ".tiff"):
+                return True
+            return False
+    except Exception:
+        return False
+
 
 def parse_strict(value: str) -> bool:
     return str(value).strip().lower() not in {"0", "false", "no", "off"}
@@ -60,7 +78,14 @@ def stage_images(args: argparse.Namespace) -> int:
     dst.mkdir(parents=True, exist_ok=True)
 
     images = [p for p in sorted(src.iterdir()) if p.is_file() and p.suffix.lower() in BASE_IMAGE_EXTS]
+    skipped_invalid = []
+
     for image in images:
+        if not is_valid_image(image):
+            skipped_invalid.append(image.name)
+            print(f"SKIP {image.name}: invalid image")
+            continue
+
         target = dst / image.name
         if target.exists():
             src_stat = image.stat()
@@ -68,10 +93,11 @@ def stage_images(args: argparse.Namespace) -> int:
             same_inode = src_stat.st_dev == dst_stat.st_dev and src_stat.st_ino == dst_stat.st_ino
             if same_inode:
                 continue
+            if src_stat.st_size == dst_stat.st_size:
+                continue
             if strict_hardlink:
                 raise SystemExit(
-                    "Hardlink requirement failed (STRICT_HARDLINK=1): "
-                    f"existing target is not a hardlink: {target}"
+                    f"Existing file differs from source (STRICT_HARDLINK=1): {target}"
                 )
             shutil.copy2(image, target)
             continue
@@ -85,7 +111,10 @@ def stage_images(args: argparse.Namespace) -> int:
                 )
             shutil.copy2(image, target)
 
-    print(f"staged_images={len(images)}")
+    staged_count = len(images) - len(skipped_invalid)
+    print(f"staged_images={staged_count}")
+    if skipped_invalid:
+        print(f"skipped_invalid={len(skipped_invalid)}")
     return 0
 
 

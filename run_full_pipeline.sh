@@ -504,13 +504,15 @@ mkdir -p "$DST" "$OUT1" "$OUT_MASK" "$OUT2" "$OUT3"
 S_HARD=$(date +%s)
 HARDLINK_CMD=$(quote_cmd "$PYTHON_BIN" "$PIPELINE_HELPERS" stage-images --src "$SRC" --dst "$DST" --strict-hardlink "$STRICT_HARDLINK")
 start_stage hardlink_stage "$HARDLINK_CMD"
-"$PYTHON_BIN" "$PIPELINE_HELPERS" stage-images \
+HARDLINK_OUTPUT=$("$PYTHON_BIN" "$PIPELINE_HELPERS" stage-images \
   --src "$SRC" \
   --dst "$DST" \
-  --strict-hardlink "$STRICT_HARDLINK"
+  --strict-hardlink "$STRICT_HARDLINK")
+echo "$HARDLINK_OUTPUT"
 E_HARD=$(date +%s)
 HARDLINK_SEC=$((E_HARD - S_HARD))
-finish_stage hardlink_stage "$HARDLINK_SEC"
+SKIPPED_INVALID=$(echo "$HARDLINK_OUTPUT" | grep -oP 'skipped_invalid=\K\d+' || echo "0")
+finish_stage hardlink_stage "$HARDLINK_SEC" --metric skipped_invalid="$SKIPPED_INVALID"
 
 S_SAM3=$(date +%s)
 SAM3_CMD=$(quote_cmd "$PYTHON_BIN" "$REPO/inpainting-workflow-master/$SAM3_SCRIPT" --input-dir "$DST" --output-dir "$OUT_MASK" --pattern '*' --model-path "$MODELS_COMFYUI_DIR/sam3" --glare-threshold "$SAM3_GLARE_THRESHOLD" --tile-rows "$SAM3_TILE_ROWS" --tile-cols "$SAM3_TILE_COLS" --resize-width "$SAM3_RESIZE_WIDTH" --resize-height "$SAM3_RESIZE_HEIGHT" --workers "$SAM3_WORKERS")

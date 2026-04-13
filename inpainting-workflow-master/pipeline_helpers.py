@@ -88,19 +88,23 @@ def stage_images(args: argparse.Namespace) -> int:
 
         target = dst / image.name
         if target.exists():
-            src_stat = image.stat()
-            dst_stat = target.stat()
-            same_inode = src_stat.st_dev == dst_stat.st_dev and src_stat.st_ino == dst_stat.st_ino
-            if same_inode:
+            if not is_valid_image(target):
+                target.unlink()
+                print(f"REMOVE {target.name}: invalid existing target")
+            else:
+                src_stat = image.stat()
+                dst_stat = target.stat()
+                same_inode = src_stat.st_dev == dst_stat.st_dev and src_stat.st_ino == dst_stat.st_ino
+                if same_inode:
+                    continue
+                if src_stat.st_size == dst_stat.st_size:
+                    continue
+                if strict_hardlink:
+                    raise SystemExit(
+                        f"Existing file differs from source (STRICT_HARDLINK=1): {target}"
+                    )
+                shutil.copy2(image, target)
                 continue
-            if src_stat.st_size == dst_stat.st_size:
-                continue
-            if strict_hardlink:
-                raise SystemExit(
-                    f"Existing file differs from source (STRICT_HARDLINK=1): {target}"
-                )
-            shutil.copy2(image, target)
-            continue
 
         try:
             target.hardlink_to(image)

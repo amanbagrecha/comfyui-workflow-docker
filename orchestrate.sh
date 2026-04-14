@@ -52,6 +52,51 @@ ORCH_LOG="$LOGS_DIR/orchestrator.log"
 log()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$ORCH_LOG"; }
 fail() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] FAIL: $*" | tee -a "$ORCH_LOG"; }
 
+cleanup_transient_run() {
+  local run_name="$1"
+
+  log "[$run_name] Deleting transient local data..."
+
+  for g in 0 1 2 3 4 5 6 7; do
+    rm -rf "$NATIVE_DATA/gpu${g}/input/${run_name}-g${g}"
+    rm -rf "$NATIVE_DATA/gpu${g}/output/${run_name}-g${g}"
+    rm -rf "$NATIVE_DATA/gpu${g}/output-postprocessed/${run_name}-g${g}"
+    rm -rf "$NATIVE_DATA/gpu${g}/output-egoblur/${run_name}-g${g}"
+    rm -rf "$NATIVE_DATA/gpu${g}/output-sam3-mask/${run_name}-g${g}"
+  done
+
+  rm -rf "$TMP_DIR/${run_name}"
+  rm -rf "$IMGS_DIR/${run_name}"
+}
+
+cleanup_stale_local_runs() {
+  local current_run="$1"
+  local path base run_name
+  declare -A seen_runs=()
+
+  for path in "$IMGS_DIR"/* "$TMP_DIR"/* "$NATIVE_DATA"/gpu*/input/*; do
+    [[ -e "$path" ]] || continue
+    base="${path##*/}"
+
+    if [[ "$path" == "$NATIVE_DATA"/gpu*/input/* ]]; then
+      run_name="${base%-g*}"
+    else
+      run_name="$base"
+    fi
+
+    [[ -n "$run_name" ]] || continue
+    [[ "$run_name" == "$current_run" ]] && continue
+    [[ -n "${seen_runs[$run_name]:-}" ]] && continue
+    seen_runs["$run_name"]=1
+
+    if tmux has-session -t "run_${run_name}" 2>/dev/null; then
+      continue
+    fi
+
+    cleanup_transient_run "$run_name"
+  done
+}
+
 sync_logs() {
   aws --profile "$UPLOAD_PROFILE" s3 sync "$LOGS_DIR/" "$S3_LOGS_PATH/orchestrate/" \
     --quiet --no-progress 2>/dev/null || true
@@ -206,34 +251,9 @@ tar_upload_cleanup() {
   log "[$run_name] Upload verified ($local_size bytes). Starting cleanup..."
   stage_end "$run_name" verify success --metric verified_bytes="$local_size"
 
-  # 4. Cleanup — order respects hardlink chains (most space freed first)
+  # 4. Cleanup — transient local data only. Keep outputs, tars, and logs.
   stage_start "$run_name" cleanup
-
-  # Intermediates: unique inodes, safe to delete independently
-  log "[$run_name] Deleting intermediates..."
-  for g in 0 1 2 3 4 5 6 7; do
-    rm -rf "$NATIVE_DATA/gpu${g}/output/${run_name}-g${g}"
-    rm -rf "$NATIVE_DATA/gpu${g}/output-postprocessed/${run_name}-g${g}"
-    rm -rf "$NATIVE_DATA/gpu${g}/output-sam3-mask/${run_name}-g${g}"
-  done
-
-  # Egoblur + output dir: hardlinked pair — must delete BOTH to free inode
-  log "[$run_name] Deleting egoblur + output dir..."
-  for g in 0 1 2 3 4 5 6 7; do
-    rm -rf "$NATIVE_DATA/gpu${g}/output-egoblur/${run_name}-g${g}"
-  done
-  rm -rf "$out_dir"
-
-  # Input: 3 hardlink refs — must delete ALL THREE to free inode
-  log "[$run_name] Deleting input (3 hardlink refs)..."
-  for g in 0 1 2 3 4 5 6 7; do
-    rm -rf "$NATIVE_DATA/gpu${g}/input/${run_name}-g${g}"
-  done
-  rm -rf "$TMP_DIR/${run_name}"
-  rm -rf "$src_dir"
-
-  # Tar: confirmed on S3, safe to delete
-  rm -f "$tar_file"
+  cleanup_transient_run "$run_name"
   stage_end "$run_name" cleanup success
   log "[$run_name] Cleanup complete. Disk free: $(df -h /workspace | awk 'NR==2{print $4}')"
 }
@@ -284,6 +304,8 @@ for i in "${!PREFIXES[@]}"; do
   n=$((i + 1))
   total=${#PREFIXES[@]}
 
+  cleanup_stale_local_runs "$run_name"
+
   if [[ "$DRY_RUN" == "1" ]]; then
     log "DRY: download s3://$WASABI_BUCKET/$prefix -> $src_dir"
     log "DRY: launch tmux run_${run_name}"
@@ -301,6 +323,7 @@ for i in "${!PREFIXES[@]}"; do
   # ── Skip if already uploaded to S3 ────────────────────────────────────────
   if aws --profile "$UPLOAD_PROFILE" s3 ls "$S3_UPLOAD_PATH/${run_name}.tar" > /dev/null 2>&1; then
     log "[$n/$total] SKIP $run_name — already on S3"
+    cleanup_transient_run "$run_name"
     emit_event "$run_name" --event run_end --status success --reason already_on_s3
     continue
   fi

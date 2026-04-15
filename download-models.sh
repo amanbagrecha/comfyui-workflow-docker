@@ -2,6 +2,7 @@
 
 # Model download script for the host-native pipeline
 # Downloads all required models from S3 first, then falls back to HTTP
+# Set HF=1 to force Hugging Face / HTTP downloads and skip S3 entirely.
 
 set -e  # Exit on error
 
@@ -25,9 +26,13 @@ COMFY_MODELS_DIR="${COMFY_MODELS_DIR:-$MODELS_ROOT/comfyui}"
 EGOBLUR_MODELS_DIR="${EGOBLUR_MODELS_DIR:-$MODELS_ROOT/egoblur_gen2}"
 PRIVACY_MODELS_DIR="${PRIVACY_MODELS_DIR:-$MODELS_ROOT/privacy_blur}"
 S3_MODELS_ROOT="${S3_MODELS_ROOT:-s3://panaromic-images/pano_models}"
-# Profile used for all S3 model downloads. Defaults to 'upload' which is
-# configured by bootstrap.sh. Override with AWS_MODELS_PROFILE=<profile>.
+
+# Profile used for all S3 model downloads. Defaults to 's3'.
 AWS_MODELS_PROFILE="${AWS_MODELS_PROFILE:-s3}"
+
+# Set HF=1 to bypass S3 and use only Hugging Face / HTTP URLs
+HF="${HF:-1}"
+
 S3_DOWNLOADS_ENABLED=0
 
 relative_model_path() {
@@ -83,7 +88,7 @@ download_model() {
         echo "↓ Downloading: $description"
         echo "  Destination: $output_path"
 
-        if [ "$S3_DOWNLOADS_ENABLED" = "1" ]; then
+        if [ "$S3_DOWNLOADS_ENABLED" = "1" ] && [ "$HF" != "1" ]; then
             relative_path="$(relative_model_path "$output_path")"
             s3_url="${S3_MODELS_ROOT%/}/$relative_path"
             echo "  Trying S3: $s3_url"
@@ -110,9 +115,16 @@ download_model() {
 
 echo "Starting model downloads..."
 echo "Existing models will be skipped."
-if check_s3_models_root; then
-    S3_DOWNLOADS_ENABLED=1
+
+if [ "$HF" = "1" ]; then
+    echo "HF mode enabled → skipping S3 completely"
+    S3_DOWNLOADS_ENABLED=0
+else
+    if check_s3_models_root; then
+        S3_DOWNLOADS_ENABLED=1
+    fi
 fi
+
 echo ""
 
 # 1. Text Encoder Model (~7B parameters, FP8)
@@ -208,5 +220,5 @@ echo "  │   ├── face_yolov8n.pt"
 echo "  │   └── yolo-v9-s-608-license-plates-end2end.onnx"
 echo ""
 echo "Run the pipeline with:"
-echo "  SRC=/abs/path/to/images FINAL_OUTPUT_DIR=/abs/path/to/final ./run_multi_gpu_pipeline.sh"
+echo "  HF=1 SRC=/abs/path/to/images FINAL_OUTPUT_DIR=/abs/path/to/final ./run_multi_gpu_pipeline.sh"
 echo ""

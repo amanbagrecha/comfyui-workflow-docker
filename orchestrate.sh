@@ -340,6 +340,24 @@ for i in "${!PREFIXES[@]}"; do
     continue
   fi
   dl_count=$(ls "$src_dir" 2>/dev/null | wc -l)
+  validate_output=$("$PYTHON_BIN" "$PIPELINE_HELPERS" assert-image-size \
+    --path "$src_dir" \
+    --width 8000 \
+    --height 4000 2>&1)
+  validate_rc=$?
+  printf '%s\n' "$validate_output" | tee -a "$dl_log" "$ORCH_LOG" >/dev/null
+  if [[ "$validate_rc" -ne 0 ]]; then
+    validate_error=$(printf '%s' "$validate_output" | tr '\n' ' ' | tr -s ' ')
+    stage_end "$run_name" download failure \
+      --error "$validate_error" \
+      --metric input_count="$dl_count"
+    emit_event "$run_name" --event run_end --status failure \
+      --error "$validate_error"
+    fail "Download validation failed: $prefix"
+    cleanup_transient_run "$run_name"
+    sync_logs
+    continue
+  fi
   stage_end "$run_name" download success --metric input_count="$dl_count"
   log "[$n/$total] Download complete: $run_name ($dl_count files)"
 

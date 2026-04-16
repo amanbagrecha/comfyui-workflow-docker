@@ -11,6 +11,8 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+from PIL import Image
+
 
 BASE_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
 
@@ -77,7 +79,11 @@ def stage_images(args: argparse.Namespace) -> int:
     strict_hardlink = parse_strict(args.strict_hardlink)
     dst.mkdir(parents=True, exist_ok=True)
 
-    images = [p for p in sorted(src.iterdir()) if p.is_file() and p.suffix.lower() in BASE_IMAGE_EXTS]
+    images = [
+        p
+        for p in sorted(src.iterdir())
+        if p.is_file() and p.suffix.lower() in BASE_IMAGE_EXTS
+    ]
     skipped_invalid = []
 
     for image in images:
@@ -94,7 +100,10 @@ def stage_images(args: argparse.Namespace) -> int:
             else:
                 src_stat = image.stat()
                 dst_stat = target.stat()
-                same_inode = src_stat.st_dev == dst_stat.st_dev and src_stat.st_ino == dst_stat.st_ino
+                same_inode = (
+                    src_stat.st_dev == dst_stat.st_dev
+                    and src_stat.st_ino == dst_stat.st_ino
+                )
                 if same_inode:
                     continue
                 if src_stat.st_size == dst_stat.st_size:
@@ -124,6 +133,43 @@ def stage_images(args: argparse.Namespace) -> int:
 
 def count_images_cmd(args: argparse.Namespace) -> int:
     print(count_images(args.path, include_bmp=args.include_bmp))
+    return 0
+
+
+def assert_image_size(args: argparse.Namespace) -> int:
+    path = args.path
+    exts = image_exts(include_bmp=args.include_bmp)
+
+    if path.is_file():
+        images = [path] if path.suffix.lower() in exts else []
+    elif path.exists():
+        images = [
+            p
+            for p in sorted(path.rglob("*"))
+            if p.is_file() and p.suffix.lower() in exts
+        ]
+    else:
+        raise SystemExit(f"Image path does not exist: {path}")
+
+    if not images:
+        raise SystemExit(f"No image files found in {path}")
+
+    expected = (args.width, args.height)
+    for image_path in images:
+        try:
+            with Image.open(image_path) as img:
+                actual = img.size
+        except Exception as exc:
+            raise SystemExit(f"Failed to open image {image_path}: {exc}") from exc
+
+        if actual != expected:
+            raise SystemExit(
+                f"Image size mismatch: {image_path} expected {expected[0]}x{expected[1]} "
+                f"got {actual[0]}x{actual[1]}"
+            )
+
+    print(f"validated_images={len(images)}")
+    print(f"validated_dimensions={expected[0]}x{expected[1]}")
     return 0
 
 
@@ -157,7 +203,9 @@ def parse_kv_list(items: list[str]) -> dict[str, object]:
 
 def append_event(args: argparse.Namespace) -> int:
     record: dict[str, object] = {
-        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "ts": datetime.now(timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z"),
         "level": args.level,
         "run_type": args.run_type,
         "run_id": args.run_id,
@@ -209,7 +257,9 @@ def split_shards(args: argparse.Namespace) -> int:
     strict_hardlink = parse_strict(args.strict_hardlink)
     exts = image_exts(include_bmp=True)
 
-    files = [p for p in sorted(src.iterdir()) if p.is_file() and p.suffix.lower() in exts]
+    files = [
+        p for p in sorted(src.iterdir()) if p.is_file() and p.suffix.lower() in exts
+    ]
     if not files:
         raise SystemExit(f"No image files found in {src}")
 
@@ -352,6 +402,13 @@ def build_parser() -> argparse.ArgumentParser:
     count_parser.add_argument("--path", type=Path, required=True)
     count_parser.add_argument("--include-bmp", action="store_true")
     count_parser.set_defaults(func=count_images_cmd)
+
+    assert_size_parser = subparsers.add_parser("assert-image-size")
+    assert_size_parser.add_argument("--path", type=Path, required=True)
+    assert_size_parser.add_argument("--width", type=int, required=True)
+    assert_size_parser.add_argument("--height", type=int, required=True)
+    assert_size_parser.add_argument("--include-bmp", action="store_true")
+    assert_size_parser.set_defaults(func=assert_image_size)
 
     event_parser = subparsers.add_parser("append-event")
     event_parser.add_argument("--file", type=Path, required=True)

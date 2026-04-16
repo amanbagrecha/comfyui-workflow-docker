@@ -69,6 +69,16 @@ cleanup_transient_run() {
   rm -rf "$IMGS_DIR/${run_name}"
 }
 
+cleanup_output_dir() {
+  local run_name="$1"
+  local out_dir="$OUTPUTS_DIR/$run_name"
+
+  if [[ -e "$out_dir" ]]; then
+    log "[$run_name] Deleting output directory: $out_dir"
+    rm -rf "$out_dir"
+  fi
+}
+
 cleanup_stale_local_runs() {
   local current_run="$1"
   local path base run_name
@@ -251,9 +261,12 @@ tar_upload_cleanup() {
   log "[$run_name] Upload verified ($local_size bytes). Starting cleanup..."
   stage_end "$run_name" verify success --metric verified_bytes="$local_size"
 
-  # 4. Cleanup — transient local data only. Keep outputs, tars, and logs.
+  # 4. Cleanup — transient local data + outputs + local tar (everything successful)
   stage_start "$run_name" cleanup
   cleanup_transient_run "$run_name"
+  cleanup_output_dir "$run_name"
+  log "[$run_name] Deleting local tar: $tar_file"
+  rm -f "$tar_file"
   stage_end "$run_name" cleanup success
   log "[$run_name] Cleanup complete. Disk free: $(df -h /workspace | awk 'NR==2{print $4}')"
 }
@@ -277,6 +290,7 @@ finalize_previous_run() {
     stage_end "$prev_name" pipeline failure --exit-code "$rc"
     emit_event "$prev_name" --event run_end --status failure --exit-code "$rc"
     fail "Pipeline failed: $prev_name (rc=$rc)"
+    cleanup_output_dir "$prev_name"
   fi
   sync_logs
 }

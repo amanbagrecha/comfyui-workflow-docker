@@ -43,8 +43,9 @@ SAM3_SCRIPT="${SAM3_SCRIPT:-sam3_tiled_mask.py}"
 LAPLACIAN_DILATION="${LAPLACIAN_DILATION:-1}"
 LAPLACIAN_BLUR="${LAPLACIAN_BLUR:-10}"
 LAPLACIAN_LEVELS="${LAPLACIAN_LEVELS:-7}"
-SEAM_WIDTH="${SEAM_WIDTH:-16}"
-SEAM_FEATHER="${SEAM_FEATHER:-15}"
+SEAM_WIDTH_FRAC="${SEAM_WIDTH_FRAC:-0.004}"
+SEAM_FEATHER_FRAC="${SEAM_FEATHER_FRAC:-0.004}"
+SEAM_PAD_FRAC="${SEAM_PAD_FRAC:-0.031}"
 SEAM_SIGMA="${SEAM_SIGMA:-1.5}"
 FINAL_OUTPUT_DIR="${FINAL_OUTPUT_DIR:-}"
 STOP_AFTER_STAGE="${STOP_AFTER_STAGE:-egoblur}"
@@ -419,8 +420,9 @@ RUN_START_ARGS=(
   --param laplacian_dilation="$LAPLACIAN_DILATION"
   --param laplacian_blur="$LAPLACIAN_BLUR"
   --param laplacian_levels="$LAPLACIAN_LEVELS"
-  --param seam_width="$SEAM_WIDTH"
-  --param seam_feather="$SEAM_FEATHER"
+  --param seam_width_frac="$SEAM_WIDTH_FRAC"
+  --param seam_pad_frac="$SEAM_PAD_FRAC"
+  --param seam_feather_frac="$SEAM_FEATHER_FRAC"
   --param seam_sigma="$SEAM_SIGMA"
   --param privacy_face_model="$PRIVACY_FACE_MODEL"
   --param privacy_lp_model="$PRIVACY_LP_MODEL"
@@ -590,7 +592,7 @@ else
     skip_stage egoblur STOP_AFTER_STAGE=inpainting
   else
     S_POST=$(date +%s)
-    POST_CMD=$(quote_cmd env LAMA_MODEL="$LAMA_MODEL" "$PYTHON_BIN" "$REPO/inpainting-workflow-master/postprocess.py" -i "$OUT1" -o "$OUT2" --top-mask "$REPO/inpainting-workflow-master/sky_mask_updated.png" --sam3-mask-dir "$OUT_MASK" --dilation "$LAPLACIAN_DILATION" --blur "$LAPLACIAN_BLUR" --levels "$LAPLACIAN_LEVELS" --seam-width "$SEAM_WIDTH" --seam-feather "$SEAM_FEATHER" --mask-sigma "$SEAM_SIGMA" --pattern '*.jpg' -j "$POSTPROCESS_WORKERS")
+    POST_CMD=$(quote_cmd env LAMA_MODEL="$LAMA_MODEL" "$PYTHON_BIN" "$REPO/inpainting-workflow-master/postprocess.py" -i "$OUT1" -o "$OUT2" --top-mask "$REPO/inpainting-workflow-master/sky_mask_updated.png" --sam3-mask-dir "$OUT_MASK" --dilation "$LAPLACIAN_DILATION" --blur "$LAPLACIAN_BLUR" --levels "$LAPLACIAN_LEVELS" --seam-width-frac "$SEAM_WIDTH_FRAC" --pad-frac "$SEAM_PAD_FRAC" --seam-feather-frac "$SEAM_FEATHER_FRAC" --mask-sigma "$SEAM_SIGMA" --pattern '*.jpg' -j "$POSTPROCESS_WORKERS")
     start_stage postprocess "$POST_CMD"
     LAMA_MODEL="$LAMA_MODEL" "$PYTHON_BIN" "$REPO/inpainting-workflow-master/postprocess.py" \
       -i "$OUT1" \
@@ -600,8 +602,9 @@ else
       --dilation "$LAPLACIAN_DILATION" \
       --blur "$LAPLACIAN_BLUR" \
       --levels "$LAPLACIAN_LEVELS" \
-      --seam-width "$SEAM_WIDTH" \
-      --seam-feather "$SEAM_FEATHER" \
+      --seam-width-frac "$SEAM_WIDTH_FRAC" \
+      --pad-frac "$SEAM_PAD_FRAC" \
+      --seam-feather-frac "$SEAM_FEATHER_FRAC" \
       --mask-sigma "$SEAM_SIGMA" \
       --pattern "*.jpg" \
       -j "$POSTPROCESS_WORKERS"

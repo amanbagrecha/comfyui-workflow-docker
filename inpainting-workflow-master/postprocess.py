@@ -104,9 +104,17 @@ def fix_top_face_black_spots(
 
 
 def fix_panorama_seam(
-    equi_rgb_u8, lama, seam_width=40, pad=128, feather=64, mask_sigma=3.0
+    equi_rgb_u8,
+    lama,
+    seam_width_frac: float = 0.004,
+    pad_frac: float = 0.031,
+    feather_frac: float = 0.004,
+    mask_sigma: float = 3.0,
 ):
     h, w, _ = equi_rgb_u8.shape
+    seam_width = max(2, int(round(w * seam_width_frac)))
+    pad = max(8, int(round(w * pad_frac)))
+    feather = max(4, int(round(w * feather_frac)))
 
     rolled = np.roll(equi_rgb_u8, shift=w // 2, axis=1)
 
@@ -277,6 +285,8 @@ def laplacian_sky_replace(
         sky_rgb_u8 = cv2.resize(sky_rgb_u8, (w, h), interpolation=cv2.INTER_LANCZOS4)
 
     h, w = base_rgb_u8.shape[:2]
+    max_safe_levels = max(1, int(np.log2(min(h, w))) - 2)
+    levels = min(max(0, int(levels)), max_safe_levels)
     mask_aligned = align_mask_to_image(sam3_mask_u8, (h, w))
     mask_oriented, _ = orient_mask_to_sky(mask_aligned)
     mask_bin = threshold_mask(mask_oriented, threshold=127)
@@ -499,9 +509,9 @@ def process_one(
     v_deg: float,
     out_hw: Tuple[int, int],
     top_feather: int,
-    seam_width: int,
-    pad: int,
-    seam_feather: int,
+    seam_width_frac: float,
+    pad_frac: float,
+    seam_feather_frac: float,
     mask_sigma: float,
     dilation: int,
     blur_radius: int,
@@ -540,9 +550,9 @@ def process_one(
     img = fix_panorama_seam(
         img,
         _LAMA,
-        seam_width=seam_width,
-        pad=pad,
-        feather=seam_feather,
+        seam_width_frac=seam_width_frac,
+        pad_frac=pad_frac,
+        feather_frac=seam_feather_frac,
         mask_sigma=mask_sigma,
     )
 
@@ -645,14 +655,26 @@ def process_one(
     type=int,
     help="Top blend feather radius",
 )
-@click.option("--seam-width", default=40, show_default=True, type=int)
-@click.option("--pad", default=128, show_default=True, type=int)
 @click.option(
-    "--seam-feather",
-    default=30,
+    "--seam-width-frac",
+    default=0.004,
     show_default=True,
-    type=int,
-    help="Seam blend feather radius",
+    type=float,
+    help="Seam inpaint half-width as a fraction of image width (resolution-independent)",
+)
+@click.option(
+    "--pad-frac",
+    default=0.031,
+    show_default=True,
+    type=float,
+    help="Seam context pad as a fraction of image width",
+)
+@click.option(
+    "--seam-feather-frac",
+    default=0.004,
+    show_default=True,
+    type=float,
+    help="Seam blend feather as a fraction of image width",
 )
 @click.option("--mask-sigma", default=3.0, show_default=True, type=float)
 @click.option(
@@ -685,9 +707,9 @@ def main(
     persp_h: int,
     persp_w: int,
     top_feather: int,
-    seam_width: int,
-    pad: int,
-    seam_feather: int,
+    seam_width_frac: float,
+    pad_frac: float,
+    seam_feather_frac: float,
     mask_sigma: float,
     jpeg_quality: int,
 ):
@@ -763,9 +785,9 @@ def main(
                     v_deg,
                     (persp_h, persp_w),
                     top_feather,
-                    seam_width,
-                    pad,
-                    seam_feather,
+                    seam_width_frac,
+                    pad_frac,
+                    seam_feather_frac,
                     mask_sigma,
                     dilation,
                     blur_radius,
@@ -797,9 +819,9 @@ def main(
                     v_deg,
                     (persp_h, persp_w),
                     top_feather,
-                    seam_width,
-                    pad,
-                    seam_feather,
+                    seam_width_frac,
+                    pad_frac,
+                    seam_feather_frac,
                     mask_sigma,
                     dilation,
                     blur_radius,

@@ -19,7 +19,7 @@ LANCZOS = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LA
 
 DEFAULT_MODEL_PATH = str(Path(__file__).resolve().parents[1] / "models" / "comfyui" / "sam3")
 DEFAULT_FLARE_PROMPT = "optical flare"
-DEFAULT_FLARE_THRESHOLD = 0.4
+DEFAULT_FLARE_THRESHOLD = 0.35
 
 
 def _pad_to_tile_grid(rgb_u8, rows, cols):

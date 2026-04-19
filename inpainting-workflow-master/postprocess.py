@@ -131,7 +131,7 @@ def fix_panorama_seam(
     if mask_sigma > 0:
         mask = cv2.GaussianBlur(mask, (0, 0), float(mask_sigma))
 
-    crop_fixed = np.asarray(lama(crop, mask), dtype=np.uint8)
+    crop_fixed = np.asarray(lama(crop, mask), dtype=np.uint8)[:h, :crop_w]
 
     if feather > 0:
         x = np.arange(crop_w, dtype=np.float32)

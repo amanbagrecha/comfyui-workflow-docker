@@ -18,6 +18,8 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp"}
 LANCZOS = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
 
 DEFAULT_MODEL_PATH = str(Path(__file__).resolve().parents[1] / "models" / "comfyui" / "sam3")
+DEFAULT_FLARE_PROMPT = "optical flare"
+DEFAULT_FLARE_THRESHOLD = 0.35
 
 
 def _pad_to_tile_grid(rgb_u8, rows, cols):
@@ -72,6 +74,23 @@ def _pad_mask_to_square(mask_u8):
     return np.pad(mask_u8, ((0, 0), (pl, side - w - pl)), mode="constant")
 
 
+def _downscale_if_needed(rgb_u8, max_width, max_height):
+    if max_width <= 0 or max_height <= 0:
+        return rgb_u8
+
+    h, w = rgb_u8.shape[:2]
+    scale = min(float(max_width) / float(w), float(max_height) / float(h), 1.0)
+    if scale >= 1.0:
+        return rgb_u8
+
+    resized_w = max(1, int(round(w * scale)))
+    resized_h = max(1, int(round(h * scale)))
+    return np.asarray(
+        Image.fromarray(rgb_u8).resize((resized_w, resized_h), LANCZOS),
+        dtype=np.uint8,
+    )
+
+
 _MODEL = None
 _PROCESSOR = None
 _CFG = None
@@ -120,13 +139,14 @@ def _process_one(task):
     cfg = _CFG
 
     rgb_u8 = np.asarray(Image.open(in_path).convert("RGB"), dtype=np.uint8)
-    if cfg["resize_width"] > 0 and cfg["resize_height"] > 0:
-        rgb_u8 = np.asarray(
-            Image.fromarray(rgb_u8).resize(
-                (cfg["resize_width"], cfg["resize_height"]), LANCZOS
-            ),
-            dtype=np.uint8,
-        )
+    rgb_u8 = _downscale_if_needed(
+        rgb_u8, cfg["resize_width"], cfg["resize_height"]
+    )
+    flare = _infer_mask(
+        Image.fromarray(rgb_u8, mode="RGB"),
+        DEFAULT_FLARE_PROMPT,
+        DEFAULT_FLARE_THRESHOLD,
+    )
 
     rgb_u8, pad_right, pad_bottom = _pad_to_tile_grid(
         rgb_u8, cfg["tile_rows"], cfg["tile_cols"]
@@ -172,6 +192,8 @@ def _process_one(task):
         stitched = stitched[:-pad_bottom, :]
     if pad_right > 0:
         stitched = stitched[:, :-pad_right]
+
+    stitched = np.maximum(stitched, flare[: stitched.shape[0], : stitched.shape[1]])
 
     stitched = np.clip(stitched * 255.0, 0, 255).astype(np.uint8)
     if cfg["square_output"]:
@@ -308,7 +330,7 @@ def main(
         f"SAM3 tiled mask: input={len(in_files)} pending={len(tasks)} workers={workers} device={device}"
     )
     click.echo(
-        f"resize={resize_width}x{resize_height} tiles={tile_rows}x{tile_cols} overlap=({overlap_x},{overlap_y}) tile_pad={tile_pad} sky='{sky_prompt}'({sky_threshold}) glare='{glare_prompt}'({glare_threshold}) glare_dilation={max(0, int(glare_dilation))}"
+        f"max_resize={resize_width}x{resize_height} downscale_only_if_bigger=true tiles={tile_rows}x{tile_cols} overlap=({overlap_x},{overlap_y}) tile_pad={tile_pad} sky='{sky_prompt}'({sky_threshold}) glare='{glare_prompt}'({glare_threshold}) flare='{DEFAULT_FLARE_PROMPT}'({DEFAULT_FLARE_THRESHOLD}) glare_dilation={max(0, int(glare_dilation))}"
     )
 
     results, failures = [], []

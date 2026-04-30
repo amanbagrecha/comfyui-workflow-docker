@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import multiprocessing
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -61,11 +62,24 @@ def gaussian_kernel_1d(
     return kernel
 
 
+def build_blur_kernels(
+    sigma: float, device: torch.device, dtype: torch.dtype
+) -> Tuple[torch.Tensor, torch.Tensor, int]:
+    """Build separable Gaussian kernels once and reuse across images."""
+    kernel_1d = gaussian_kernel_1d(sigma=sigma, device=device, dtype=dtype)
+    k = kernel_1d.numel()
+    kernel_x = kernel_1d.view(1, 1, 1, k).repeat(3, 1, 1, 1)
+    kernel_y = kernel_1d.view(1, 1, k, 1).repeat(3, 1, 1, 1)
+    return kernel_x, kernel_y, k // 2
+
+
 def gaussian_blur_gpu_bgr(
     image_bgr_u8: np.ndarray,
-    sigma: float,
     device: torch.device,
     dtype: torch.dtype,
+    kernel_x: torch.Tensor,
+    kernel_y: torch.Tensor,
+    pad: int,
 ) -> np.ndarray:
     img = (
         torch.from_numpy(image_bgr_u8)
@@ -73,20 +87,12 @@ def gaussian_blur_gpu_bgr(
         .permute(2, 0, 1)
         .unsqueeze(0)
     )
-
-    kernel_1d = gaussian_kernel_1d(sigma=sigma, device=device, dtype=dtype)
-    k = kernel_1d.numel()
-
-    kernel_x = kernel_1d.view(1, 1, 1, k).repeat(3, 1, 1, 1)
-    kernel_y = kernel_1d.view(1, 1, k, 1).repeat(3, 1, 1, 1)
-
-    pad = k // 2
     x = F.pad(img, (pad, pad, 0, 0), mode="reflect")
     x = F.conv2d(x, kernel_x, groups=3)
     x = F.pad(x, (0, 0, pad, pad), mode="reflect")
     x = F.conv2d(x, kernel_y, groups=3)
-
     out = x.squeeze(0).permute(1, 2, 0).clamp(0, 255).to(torch.uint8).cpu().numpy()
+    del img, x
     return out
 
 
@@ -100,6 +106,9 @@ def apply_roi_blur_bgr(
     roi_pad: int,
     roi_min_area: int,
     roi_mask_threshold: float,
+    kernel_x: torch.Tensor,
+    kernel_y: torch.Tensor,
+    blur_pad: int,
 ) -> np.ndarray:
     out = image_bgr_u8.astype(np.float32).copy()
     bin_mask = (mask_f32 >= roi_mask_threshold).astype(np.uint8)
@@ -122,14 +131,15 @@ def apply_roi_blur_bgr(
 
         roi = image_bgr_u8[y1:y2, x1:x2]
         if blur_backend == "gpu":
-            pad = max(1, int(round(3.0 * max(0.1, float(sigma)))))
-            if roi.shape[0] <= pad or roi.shape[1] <= pad:
+            if roi.shape[0] <= blur_pad or roi.shape[1] <= blur_pad:
                 continue
             roi_blur = gaussian_blur_gpu_bgr(
                 image_bgr_u8=roi,
-                sigma=sigma,
                 device=device,
                 dtype=dtype,
+                kernel_x=kernel_x,
+                kernel_y=kernel_y,
+                pad=blur_pad,
             )
         else:
             roi_blur = cv2.GaussianBlur(roi, (0, 0), sigmaX=sigma)
@@ -258,6 +268,11 @@ def _process_chunk(packed: dict) -> tuple[list, list]:
             providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
         )
 
+    # Build Gaussian kernels once per worker; reused for every image.
+    blur_kernel_x, blur_kernel_y, blur_pad = build_blur_kernels(
+        sigma=packed["blur_sigma"], device=p360_device, dtype=blur_dtype
+    )
+
     rows_summary: list = []
     rows_profile: list = []
 
@@ -282,13 +297,15 @@ def _process_chunk(packed: dict) -> tuple[list, list]:
         pano_h, pano_w = pano.shape[:2]
 
         t = time.perf_counter()
+        pano_t = bgr_to_tensor(pano, device=p360_device)
         cube_dict = p360.e2c(
-            bgr_to_tensor(pano, device=p360_device),
+            pano_t,
             face_w=packed["det_face_w"],
             mode="bilinear",
             cube_format="dict",
             channels_first=True,
         )
+        del pano_t
         t_e2c = time.perf_counter() - t
 
         all_dets: List[Tuple[str, int, int, int, int, float, str]] = []
@@ -320,6 +337,9 @@ def _process_chunk(packed: dict) -> tuple[list, list]:
                 all_dets.append((face_name, x1, y1, x2, y2, conf, "LP"))
         t_detect_lp = time.perf_counter() - t
 
+        # cube_dict no longer needed after detection; free it before mask projection.
+        del cube_dict
+
         annotated_pano = pano.copy() if packed["output_mode"] == "both" else None
         t_project = 0.0
         t_blur = 0.0
@@ -346,9 +366,11 @@ def _process_chunk(packed: dict) -> tuple[list, list]:
                 cube_format="dict",
                 channels_first=True,
             )
+            del mask_cube
 
             mask_t = projected.max(dim=0).values
             mask = np.clip(mask_t.detach().cpu().numpy(), 0.0, 1.0)
+            del mask_t
             if packed["mask_threshold"] > 0:
                 mask = (mask >= packed["mask_threshold"]).astype(np.float32)
             if packed["mask_feather"] > 0:
@@ -382,6 +404,7 @@ def _process_chunk(packed: dict) -> tuple[list, list]:
                         cx, cy = map(int, main_contour[0][0])
                     draw_label(annotated_pano, f"{typ} {conf:.2f}", cx, cy, color)
 
+            del projected
             t_project = time.perf_counter() - t
 
             t = time.perf_counter()
@@ -396,14 +419,19 @@ def _process_chunk(packed: dict) -> tuple[list, list]:
                     roi_pad=packed["roi_pad"],
                     roi_min_area=packed["roi_min_area"],
                     roi_mask_threshold=packed["roi_mask_threshold"],
+                    kernel_x=blur_kernel_x,
+                    kernel_y=blur_kernel_y,
+                    blur_pad=blur_pad,
                 )
             else:
                 if blur_backend == "gpu":
                     blurred = gaussian_blur_gpu_bgr(
                         image_bgr_u8=pano,
-                        sigma=packed["blur_sigma"],
                         device=p360_device,
                         dtype=blur_dtype,
+                        kernel_x=blur_kernel_x,
+                        kernel_y=blur_kernel_y,
+                        pad=blur_pad,
                     )
                 else:
                     blurred = cv2.GaussianBlur(
@@ -417,6 +445,12 @@ def _process_chunk(packed: dict) -> tuple[list, list]:
             t_blur = time.perf_counter() - t
         else:
             out_blur = pano
+
+        # Release GPU allocator cache after every image to prevent fragmentation
+        # accumulating over hundreds of sequential images within one worker.
+        if p360_device.type == "cuda":
+            torch.cuda.empty_cache()
+        gc.collect()
 
         t = time.perf_counter()
         if not write_jpg(blur_path, out_blur, quality=packed["jpg_quality"]):

@@ -387,6 +387,28 @@ for i in "${!PREFIXES[@]}"; do
   run_log="$LOGS_DIR/run_${run_name}.log"
   rc_file="$LOGS_DIR/rc_${run_name}.txt"
   log "Launching tmux session: run_${run_name}"
+  # ── Resolve perspective mask for this run ────────────────────────────────
+  _mask_rel=$("$PYTHON_BIN" -c "
+import json, sys
+try:
+    idx = json.load(open('$REPO/perspective_mask_index.json'))
+    print(idx.get('${run_name}', ''))
+except Exception as e:
+    sys.stderr.write(str(e) + '\n')
+    print('')
+" 2>>"$ORCH_LOG")
+  if [ -z "$_mask_rel" ]; then
+    stage_end "$run_name" pipeline failure --error "no_perspective_mask"
+    emit_event "$run_name" --event run_end --status failure \
+      --error "run_id not in perspective_mask_index.json — no mask assigned, skipping"
+    fail "[$run_name] No perspective mask found in index — skipping run"
+    cleanup_transient_run "$run_name"
+    sync_logs
+    continue
+  fi
+  _mask_abs="$REPO/$_mask_rel"
+  log "[$run_name] Perspective mask: $_mask_abs"
+
   stage_start "$run_name" pipeline
 
   tmux new-session -d -s "run_${run_name}" \
@@ -395,6 +417,7 @@ for i in "${!PREFIXES[@]}"; do
      RUN_NAME=${run_name} \
      SRC=${src_dir} \
      FINAL_OUTPUT_DIR=${OUTPUTS_DIR} \
+     PERSPECTIVE_MASK=${_mask_abs} \
      bash ${PIPELINE} 2>&1 | tee ${run_log}; \
      echo \$? > ${rc_file}"
 

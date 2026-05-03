@@ -418,6 +418,7 @@ export COMFY_READY_POLL="${COMFY_READY_POLL:-2}"
 export SKIP_PREFLIGHT=1
 export RUN_ID="$child_run_id"
 export PARENT_RUN_ID="$RUN_NAME"
+export PERSPECTIVE_MASK="${PERSPECTIVE_MASK:-}"
 
 "$RUN_FULL"
 rc=\$?

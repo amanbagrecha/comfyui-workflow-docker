@@ -382,8 +382,12 @@ if [ ! -f "$SKY_REFERENCE_SOURCE" ]; then
   exit 1
 fi
 
-if [ ! -f "$REPO/inpainting-workflow-master/perspective_mask.png" ]; then
-  echo "ERROR: perspective_mask.png not found in inpainting-workflow-master"
+if [ -z "${PERSPECTIVE_MASK:-}" ]; then
+  echo "ERROR: PERSPECTIVE_MASK is not set. Every run must have a perspective mask assigned."
+  exit 1
+fi
+if [ ! -f "$PERSPECTIVE_MASK" ]; then
+  echo "ERROR: PERSPECTIVE_MASK file not found: $PERSPECTIVE_MASK"
   exit 1
 fi
 
@@ -430,6 +434,7 @@ RUN_START_ARGS=(
   --param comfy_image_node_id="$COMFY_IMAGE_NODE_ID"
   --param comfy_mask_node_id="$COMFY_MASK_NODE_ID"
   --param comfy_sam3_mask_node_id="$COMFY_SAM3_MASK_NODE_ID"
+  --path perspective_mask="$PERSPECTIVE_MASK"
   --path log_file="$LOG_FILE"
   --path events_file="$EVENTS_FILE"
   --path repo="$REPO"
@@ -480,10 +485,8 @@ if [ "${SKIP_PREFLIGHT:-0}" != "1" ]; then
   fi
 fi
 
-if [ ! -f "$COMFY_INPUT_ROOT/perspective_mask.png" ]; then
-  cp "$REPO/inpainting-workflow-master/perspective_mask.png" "$COMFY_INPUT_ROOT/perspective_mask.png"
-  echo "Copied perspective mask to $COMFY_INPUT_ROOT/perspective_mask.png"
-fi
+cp "$PERSPECTIVE_MASK" "$COMFY_INPUT_ROOT/perspective_mask.png"
+echo "Staged perspective mask: $PERSPECTIVE_MASK -> $COMFY_INPUT_ROOT/perspective_mask.png"
 
 SKY_REFERENCE_TARGET="$COMFY_INPUT_ROOT/$SKY_REFERENCE_FILENAME"
 cp "$SKY_REFERENCE_SOURCE" "$SKY_REFERENCE_TARGET"

@@ -101,6 +101,22 @@ Each per-GPU shard job performs the following stages:
 - `AWS_DOWNLOAD_PROFILE`
 - `DOWNLOAD_S3_URI`
 - `DOWNLOAD_DEST_DIR`
+- `PERSPECTIVE_MASK` — absolute path to the per-run perspective mask PNG; **required** by `run_full_pipeline.sh` (no fallback). Set automatically by `orchestrate.sh` via lookup in `perspective_mask_index.json`. Hard-fails if unset or file missing.
+
+## Perspective Mask Index
+
+`perspective_mask_index.json` maps each `run_id` to its relative mask path under `perspective_masks/<vehicle>/<subtype>/perspective_mask.png`.
+
+- Masks are committed at `perspective_masks/` and available on all cloned machines.
+- Runs not in the index (no subtype label or mask file missing) are skipped by `orchestrate.sh` with a `no_perspective_mask` failure event.
+- Regenerate after reviews DB changes:
+
+```bash
+python scripts/generate_mask_index.py \
+  --db /home/ubuntu/allvehicletypes/car-type-review-app/data/reviews.sqlite3
+```
+
+Then commit and push `perspective_mask_index.json`.
 
 ## Host-Side Paths
 - Source dataset: user-provided `SRC`

@@ -32,6 +32,7 @@ S3_UPLOAD_PATH="${S3_UPLOAD_PATH:-s3://aipanoexport-batch2/panoramic_clean}"
 S3_LOGS_PATH="${S3_LOGS_PATH:-s3://aipanoexport-batch2/logs/$(hostname)}"
 EVERY_NTH="${EVERY_NTH:-3}"
 DRY_RUN="${DRY_RUN:-0}"
+DOWNLOAD_WORKERS="${DOWNLOAD_WORKERS:-16}"
 
 IMGS_DIR="/workspace/imgs"
 OUTPUTS_DIR="/workspace/outputs"
@@ -196,7 +197,7 @@ download_prefix() {
     --prefix "$prefix" \
     --dest "$(dirname "$dest_dir")" \
     --every "$EVERY_NTH" \
-    --workers 100 \
+    --workers "$DOWNLOAD_WORKERS" \
     2>&1 | tee "$log_file"
 
   return ${PIPESTATUS[0]}

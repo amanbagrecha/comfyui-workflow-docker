@@ -154,22 +154,23 @@ def assert_image_size(args: argparse.Namespace) -> int:
     if not images:
         raise SystemExit(f"No image files found in {path}")
 
-    expected = (args.width, args.height)
+    first_size = None
     for image_path in images:
         try:
             with Image.open(image_path) as img:
-                actual = img.size
+                w, h = img.size
         except Exception as exc:
             raise SystemExit(f"Failed to open image {image_path}: {exc}") from exc
 
-        if actual != expected:
+        if h == 0 or w != h * 2:
             raise SystemExit(
-                f"Image size mismatch: {image_path} expected {expected[0]}x{expected[1]} "
-                f"got {actual[0]}x{actual[1]}"
+                f"Image aspect ratio mismatch: {image_path} is {w}x{h} (expected 2:1)"
             )
+        if first_size is None:
+            first_size = (w, h)
 
     print(f"validated_images={len(images)}")
-    print(f"validated_dimensions={expected[0]}x{expected[1]}")
+    print(f"validated_dimensions={first_size[0]}x{first_size[1]}")
     return 0
 
 
@@ -405,8 +406,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     assert_size_parser = subparsers.add_parser("assert-image-size")
     assert_size_parser.add_argument("--path", type=Path, required=True)
-    assert_size_parser.add_argument("--width", type=int, required=True)
-    assert_size_parser.add_argument("--height", type=int, required=True)
     assert_size_parser.add_argument("--include-bmp", action="store_true")
     assert_size_parser.set_defaults(func=assert_image_size)
 

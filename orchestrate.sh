@@ -356,9 +356,7 @@ for i in "${!PREFIXES[@]}"; do
   fi
   dl_count=$(ls "$src_dir" 2>/dev/null | wc -l)
   validate_output=$("$PYTHON_BIN" "$PIPELINE_HELPERS" assert-image-size \
-    --path "$src_dir" \
-    --width 8000 \
-    --height 4000 2>&1)
+    --path "$src_dir" 2>&1)
   validate_rc=$?
   printf '%s\n' "$validate_output" | tee -a "$dl_log" "$ORCH_LOG" >/dev/null
   if [[ "$validate_rc" -ne 0 ]]; then

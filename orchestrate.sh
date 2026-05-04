@@ -211,7 +211,9 @@ tar_upload_cleanup() {
   local src_dir="$IMGS_DIR/$run_name"
   local out_dir="$OUTPUTS_DIR/$run_name"
   local tar_file="$TARS_DIR/${run_name}.tar"
+  local manifest_file="$TARS_DIR/${run_name}.manifest.json"
   local s3dest="$S3_UPLOAD_PATH/${run_name}.tar"
+  local manifest_s3dest="$S3_UPLOAD_PATH/${run_name}.manifest.json"
 
   # 1. Tar
   stage_start "$run_name" tar
@@ -225,6 +227,17 @@ tar_upload_cleanup() {
   tar_bytes=$(stat -c%s "$tar_file" 2>/dev/null || echo 0)
   log "[$run_name] Tar done: $(du -sh "$tar_file" | cut -f1)"
   stage_end "$run_name" tar success --metric tar_bytes="$tar_bytes"
+
+  # 1b. Generate manifest from local tar (non-fatal — failure just logged)
+  log "[$run_name] Generating manifest..."
+  if uv run python "$REPO/scripts/generate_manifest.py" \
+      "$tar_file" "$run_name" --out "$manifest_file" \
+      2>&1 | tee -a "$ORCH_LOG"; then
+    log "[$run_name] Manifest ready: $manifest_file"
+  else
+    log "[$run_name] WARNING: manifest generation failed (non-fatal)"
+    rm -f "$manifest_file"
+  fi
 
   # 2. Upload (skipped if already on S3)
   stage_start "$run_name" upload
@@ -247,6 +260,15 @@ tar_upload_cleanup() {
     stage_end "$run_name" upload success --metric upload_bytes="$tar_bytes"
   fi
 
+  # 2b. Upload manifest alongside tar (non-fatal — tar upload is what matters)
+  if [[ -f "$manifest_file" ]]; then
+    log "[$run_name] Uploading manifest to $manifest_s3dest..."
+    if ! aws --profile "$UPLOAD_PROFILE" s3 cp "$manifest_file" "$manifest_s3dest" \
+        2>&1 | tee -a "$ORCH_LOG"; then
+      log "[$run_name] WARNING: manifest upload failed (non-fatal)"
+    fi
+  fi
+
   # 3. Verify: compare sizes
   stage_start "$run_name" verify
   local s3_size local_size
@@ -262,12 +284,12 @@ tar_upload_cleanup() {
   log "[$run_name] Upload verified ($local_size bytes). Starting cleanup..."
   stage_end "$run_name" verify success --metric verified_bytes="$local_size"
 
-  # 4. Cleanup — transient local data + outputs + local tar (everything successful)
+  # 4. Cleanup — transient local data + outputs + local tar + local manifest
   stage_start "$run_name" cleanup
   cleanup_transient_run "$run_name"
   cleanup_output_dir "$run_name"
-  log "[$run_name] Deleting local tar: $tar_file"
-  rm -f "$tar_file"
+  log "[$run_name] Deleting local tar and manifest: $tar_file"
+  rm -f "$tar_file" "$manifest_file"
   stage_end "$run_name" cleanup success
   log "[$run_name] Cleanup complete. Disk free: $(df -h /workspace | awk 'NR==2{print $4}')"
 }

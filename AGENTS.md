@@ -132,6 +132,55 @@ Then commit and push `perspective_mask_index.json`.
 - Per-shard logs: `logs/fullrun_<RUN_NAME>_g<gpu_id>.log` and `logs/fullrun_<RUN_NAME>_g<gpu_id>.events.jsonl`
 - ComfyUI service logs: `logs/comfyui_g<gpu_id>.log`
 
+## Tar Manifests
+
+Every tar uploaded to S3 gets a companion `<run_id>.manifest.json` at the same S3 path.
+The manifest lets you inspect contents and fetch individual files without downloading the whole tar.
+
+**Format:**
+```json
+{
+  "run_id": "1234_5678",
+  "file_count": 2375,
+  "tar_bytes": 1073741824,
+  "generated_at": "2026-05-04T10:00:00+00:00",
+  "files": [
+    { "name": "1234_5678/foo.jpg", "size": 45231, "tar_offset": 1024 }
+  ]
+}
+```
+
+**Fetching one image via S3 range request:**
+```bash
+# Read the manifest to find tar_offset and size for your image
+aws --profile s3 s3 cp s3://aipanoexport-batch2/batch-10/1234_5678.manifest.json - | python -m json.tool
+
+# Fetch just that image (no full-tar download)
+aws --profile s3 s3api get-object \
+  --bucket aipanoexport-batch2 \
+  --key batch-10/1234_5678.tar \
+  --range "bytes=<tar_offset>-<tar_offset+size-1>" \
+  out.jpg
+```
+
+**Backfilling manifests for already-uploaded tars** (controller machine, one-time):
+```bash
+# Dry run first
+uv run --with boto3 python scripts/backfill_manifests.py \
+  --bucket aipanoexport-batch2 \
+  --prefixes batch-03 batch-04 batch-05 batch-06 batch-07 batch-08 batch-09 batch-10 \
+  --profile s3 --dry-run
+
+# Then for real
+uv run --with boto3 python scripts/backfill_manifests.py \
+  --bucket aipanoexport-batch2 \
+  --prefixes batch-03 batch-04 batch-05 batch-06 batch-07 batch-08 batch-09 batch-10 \
+  --profile s3
+```
+
+Backfill reads only tar headers via S3 range requests (512 bytes per file) — not the full tar.
+Backfilled manifests include `"backfilled": true`. The vast_fleet.db is not affected; manifests are pure S3 artifacts co-located with their tar.
+
 ## Checking Logs
 ```bash
 # Live orchestrator status (upload progress, current sequence, failures)

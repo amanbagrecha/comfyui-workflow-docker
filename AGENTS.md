@@ -134,52 +134,26 @@ Then commit and push `perspective_mask_index.json`.
 
 ## Tar Manifests
 
-Every tar uploaded to S3 gets a companion `<run_id>.manifest.json` at the same S3 path.
-The manifest lets you inspect contents and fetch individual files without downloading the whole tar.
+Every tar gets a companion `<run_id>.manifest.json` at the same S3 path with `file_count`, `tar_bytes`, and per-file `{name, size, tar_offset}`.
 
-**Format:**
-```json
-{
-  "run_id": "1234_5678",
-  "file_count": 2375,
-  "tar_bytes": 1073741824,
-  "generated_at": "2026-05-04T10:00:00+00:00",
-  "files": [
-    { "name": "1234_5678/foo.jpg", "size": 45231, "tar_offset": 1024 }
-  ]
-}
-```
-
-**Fetching one image via S3 range request:**
+**Fetch one image without downloading the whole tar:**
 ```bash
-# Read the manifest to find tar_offset and size for your image
-aws --profile s3 s3 cp s3://aipanoexport-batch2/batch-10/1234_5678.manifest.json - | python -m json.tool
+# 1. Get offset + size from manifest
+aws --profile s3 s3 cp s3://aipanoexport-batch2/batch-10/<run_id>.manifest.json -
 
-# Fetch just that image (no full-tar download)
+# 2. Range-fetch just that file
 aws --profile s3 s3api get-object \
-  --bucket aipanoexport-batch2 \
-  --key batch-10/1234_5678.tar \
-  --range "bytes=<tar_offset>-<tar_offset+size-1>" \
-  out.jpg
+  --bucket aipanoexport-batch2 --key batch-10/<run_id>.tar \
+  --range "bytes=<tar_offset>-<tar_offset+size-1>" out.jpg
 ```
 
-**Backfilling manifests for already-uploaded tars** (controller machine, one-time):
+**Backfill for already-uploaded tars** (run from controller, reads only headers — no full download):
 ```bash
-# Dry run first
 uv run --with boto3 python scripts/backfill_manifests.py \
   --bucket aipanoexport-batch2 \
   --prefixes batch-03 batch-04 batch-05 batch-06 batch-07 batch-08 batch-09 batch-10 \
-  --profile s3 --dry-run
-
-# Then for real
-uv run --with boto3 python scripts/backfill_manifests.py \
-  --bucket aipanoexport-batch2 \
-  --prefixes batch-03 batch-04 batch-05 batch-06 batch-07 batch-08 batch-09 batch-10 \
-  --profile s3
+  --profile s3 [--dry-run] [--limit N]
 ```
-
-Backfill reads only tar headers via S3 range requests (512 bytes per file) — not the full tar.
-Backfilled manifests include `"backfilled": true`. The vast_fleet.db is not affected; manifests are pure S3 artifacts co-located with their tar.
 
 ## Checking Logs
 ```bash

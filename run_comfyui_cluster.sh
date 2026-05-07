@@ -102,7 +102,7 @@ export COMFY_INPUT_ROOT="$data_dir/input"
 export COMFY_OUTPUT_ROOT="$data_dir/output"
 export COMFY_TEMP_PARENT="$data_dir"
 
-"$REPO/run_comfyui_service.sh"
+exec "$REPO/run_comfyui_service.sh"
 EOF
     chmod +x "$job_script"
     tmux new-session -d -s "$session_name" "$job_script"

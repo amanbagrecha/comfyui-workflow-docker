@@ -30,6 +30,9 @@ COMFY_INPUT_ROOT="${COMFY_INPUT_ROOT:-$COMFY_DATA_DIR/input}"
 COMFY_OUTPUT_ROOT="${COMFY_OUTPUT_ROOT:-$COMFY_DATA_DIR/output}"
 COMFY_TMUX_SESSION_PREFIX="${COMFY_TMUX_SESSION_PREFIX:-comfyui}"
 COMFY_SESSION_NAME="${COMFY_SESSION_NAME:-${COMFY_TMUX_SESSION_PREFIX}-g${GPU_ID}}"
+COMFY_STOP_TIMEOUT="${COMFY_STOP_TIMEOUT:-60}"
+COMFY_STOP_POLL="${COMFY_STOP_POLL:-2}"
+COMFY_STOP_MAX_USED_MB="${COMFY_STOP_MAX_USED_MB:-1024}"
 
 POSTPROCESS_WORKERS="${POSTPROCESS_WORKERS:-3}"
 PRIVACY_WORKERS="${PRIVACY_WORKERS:-4}"
@@ -338,10 +341,46 @@ ensure_comfyui_service() {
   COMFY_STARTED_BY_THIS_RUN=1
 }
 
+gpu_memory_used_mb() {
+  nvidia-smi -i "$GPU_ID" --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | tr -d '[:space:]'
+}
+
+wait_for_gpu_memory_release() {
+  local deadline used now
+  deadline=$(( $(date +%s) + COMFY_STOP_TIMEOUT ))
+
+  while true; do
+    used="$(gpu_memory_used_mb || true)"
+    if [[ "$used" =~ ^[0-9]+$ ]] && (( used <= COMFY_STOP_MAX_USED_MB )); then
+      echo "GPU $GPU_ID memory clear after ComfyUI stop: used=${used}MiB max=${COMFY_STOP_MAX_USED_MB}MiB"
+      return 0
+    fi
+
+    now=$(date +%s)
+    if (( now >= deadline )); then
+      echo "ERROR: GPU $GPU_ID memory did not clear after ${COMFY_STOP_TIMEOUT}s (used=${used:-unknown}MiB max=${COMFY_STOP_MAX_USED_MB}MiB)"
+      nvidia-smi -i "$GPU_ID" || true
+      return 1
+    fi
+
+    echo "Waiting for GPU $GPU_ID memory to clear after ComfyUI stop: used=${used:-unknown}MiB max=${COMFY_STOP_MAX_USED_MB}MiB"
+    sleep "$COMFY_STOP_POLL"
+  done
+}
+
 stop_comfyui_service() {
+  local pane_pid=""
+
   if tmux has-session -t "$COMFY_SESSION_NAME" 2>/dev/null; then
-    tmux kill-session -t "$COMFY_SESSION_NAME"
+    pane_pid="$(tmux display-message -p -t "$COMFY_SESSION_NAME" '#{pane_pid}' 2>/dev/null || true)"
+    if [[ "$pane_pid" =~ ^[0-9]+$ ]]; then
+      echo "Sending TERM to ComfyUI session=$COMFY_SESSION_NAME pid=$pane_pid"
+      kill -TERM "$pane_pid" 2>/dev/null || true
+    fi
+    tmux kill-session -t "$COMFY_SESSION_NAME" >/dev/null 2>&1 || true
   fi
+
+  wait_for_gpu_memory_release
 }
 
 trap 'on_error $? $LINENO "$BASH_COMMAND"' ERR
@@ -359,6 +398,9 @@ fi
 
 validate_flag STRICT_HARDLINK "$STRICT_HARDLINK"
 validate_flag FORCE_REPROCESS "$FORCE_REPROCESS"
+validate_min_int COMFY_STOP_TIMEOUT "$COMFY_STOP_TIMEOUT" 1
+validate_min_int COMFY_STOP_POLL "$COMFY_STOP_POLL" 1
+validate_min_int COMFY_STOP_MAX_USED_MB "$COMFY_STOP_MAX_USED_MB" 0
 
 if [[ "$STOP_AFTER_STAGE" != "sam3" && "$STOP_AFTER_STAGE" != "inpainting" && "$STOP_AFTER_STAGE" != "postprocess" && "$STOP_AFTER_STAGE" != "egoblur" ]]; then
   echo "ERROR: Invalid STOP_AFTER_STAGE=$STOP_AFTER_STAGE (expected: sam3|inpainting|postprocess|egoblur)"

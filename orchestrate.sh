@@ -7,13 +7,14 @@
 # Each prefix is a Wasabi path like "1234567890_9876543210/session_id"
 # Folder naming follows s3_parallel_download.py: parent_child
 #
-# Required env vars (set by bootstrap or manually):
-#   AWS_DOWNLOAD_PROFILE  — Wasabi profile (default: download)
-#   AWS_UPLOAD_PROFILE    — S3 upload profile (default: s3)
+# Required env vars (must be set — script aborts if missing):
+#   S3_UPLOAD_PATH        — Upload destination (e.g. s3://my-bucket/my-batch)
+#   S3_LOGS_PATH          — Logs destination (e.g. s3://my-bucket/my-batch/logs/host)
 #
-# Optional:
+# Optional env vars:
+#   AWS_DOWNLOAD_PROFILE  — Wasabi profile (default: wasabi)
+#   AWS_UPLOAD_PROFILE    — Upload profile (default: wasabi)
 #   WASABI_BUCKET         — Source bucket (default: pano-bkp)
-#   S3_UPLOAD_PATH        — Upload destination (default: s3://aipanoexport-batch2/panoramic_clean)
 #   EVERY_NTH             — Download every Nth file (default: 3)
 #   DRY_RUN               — Set to 1 to print plan without executing
 #
@@ -26,10 +27,10 @@ set -uo pipefail
 # ── Config ────────────────────────────────────────────────────────────────────
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DOWNLOAD_PROFILE="${AWS_DOWNLOAD_PROFILE:-wasabi}"
-UPLOAD_PROFILE="${AWS_UPLOAD_PROFILE:-s3}"
+UPLOAD_PROFILE="${AWS_UPLOAD_PROFILE:-wasabi}"
 WASABI_BUCKET="${WASABI_BUCKET:-pano-bkp}"
-S3_UPLOAD_PATH="${S3_UPLOAD_PATH:-s3://aipanoexport-batch2/panoramic_clean}"
-S3_LOGS_PATH="${S3_LOGS_PATH:-s3://aipanoexport-batch2/logs/$(hostname)}"
+: "${S3_UPLOAD_PATH:?S3_UPLOAD_PATH is required (e.g. s3://my-bucket/my-batch)}"
+: "${S3_LOGS_PATH:?S3_LOGS_PATH is required (e.g. s3://my-bucket/my-batch/logs/host)}"
 EVERY_NTH="${EVERY_NTH:-3}"
 DRY_RUN="${DRY_RUN:-0}"
 DOWNLOAD_WORKERS="${DOWNLOAD_WORKERS:-16}"

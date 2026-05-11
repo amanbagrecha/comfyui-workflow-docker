@@ -2,6 +2,7 @@
 
 import gc
 import multiprocessing as mp
+import os
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -281,6 +282,19 @@ def main(
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    cuda_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "<unset>")
+    cuda_summary = f"CUDA_VISIBLE_DEVICES={cuda_visible_devices} cuda_available={torch.cuda.is_available()}"
+    if torch.cuda.is_available():
+        try:
+            current_device = torch.cuda.current_device()
+            cuda_summary += (
+                f" cuda_device_count={torch.cuda.device_count()}"
+                f" cuda_current_device={current_device}"
+                f" cuda_current_name={torch.cuda.get_device_name(current_device)}"
+            )
+        except Exception as exc:
+            cuda_summary += f" cuda_diagnostics_error={exc}"
+
     if input_path.is_file():
         in_files, in_root = [input_path], input_path.parent
     else:
@@ -329,6 +343,7 @@ def main(
     click.echo(
         f"SAM3 tiled mask: input={len(in_files)} pending={len(tasks)} workers={workers} device={device}"
     )
+    click.echo(cuda_summary)
     click.echo(
         f"max_resize={resize_width}x{resize_height} downscale_only_if_bigger=true tiles={tile_rows}x{tile_cols} overlap=({overlap_x},{overlap_y}) tile_pad={tile_pad} sky='{sky_prompt}'({sky_threshold}) glare='{glare_prompt}'({glare_threshold}) flare='{DEFAULT_FLARE_PROMPT}'({DEFAULT_FLARE_THRESHOLD}) glare_dilation={max(0, int(glare_dilation))}"
     )

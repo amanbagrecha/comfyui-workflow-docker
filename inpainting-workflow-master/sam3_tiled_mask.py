@@ -23,6 +23,25 @@ DEFAULT_FLARE_PROMPT = "optical flare"
 DEFAULT_FLARE_THRESHOLD = 0.35
 
 
+def _pad_rgb_for_inference(rgb_u8, pad):
+    pad = max(0, int(pad))
+    if pad == 0:
+        return rgb_u8
+    return np.pad(
+        rgb_u8,
+        ((pad, pad), (pad, pad), (0, 0)),
+        mode="constant",
+        constant_values=0,
+    )
+
+
+def _crop_inference_pad(mask_np, pad):
+    pad = max(0, int(pad))
+    if pad == 0:
+        return mask_np
+    return mask_np[pad:-pad, pad:-pad]
+
+
 def _pad_to_tile_grid(rgb_u8, rows, cols):
     h, w = rgb_u8.shape[:2]
     pad_right = (cols - (w % cols)) % cols
@@ -143,11 +162,20 @@ def _process_one(task):
     rgb_u8 = _downscale_if_needed(
         rgb_u8, cfg["resize_width"], cfg["resize_height"]
     )
-    flare = _infer_mask(
-        Image.fromarray(rgb_u8, mode="RGB"),
+    tile_pad = max(0, int(cfg["tile_pad"]))
+    full_frame_u8 = _pad_rgb_for_inference(rgb_u8, tile_pad)
+
+    flare = _crop_inference_pad(_infer_mask(
+        Image.fromarray(full_frame_u8, mode="RGB"),
         DEFAULT_FLARE_PROMPT,
         DEFAULT_FLARE_THRESHOLD,
+    ), tile_pad)
+    glare = _infer_mask(
+        Image.fromarray(full_frame_u8, mode="RGB"),
+        cfg["glare_prompt"],
+        cfg["glare_threshold"],
     )
+    glare = _crop_inference_pad(_dilate_mask(glare, cfg["glare_dilation"]), tile_pad)
 
     rgb_u8, pad_right, pad_bottom = _pad_to_tile_grid(
         rgb_u8, cfg["tile_rows"], cfg["tile_cols"]
@@ -166,27 +194,14 @@ def _process_one(task):
     stitched = np.zeros((h, w), dtype=np.float32)
     for x1, y1, x2, y2 in windows:
         tile_u8 = rgb_u8[y1:y2, x1:x2]
-        tile_pad = max(0, int(cfg["tile_pad"]))
-        if tile_pad > 0:
-            tile_u8 = np.pad(
-                tile_u8,
-                ((tile_pad, tile_pad), (tile_pad, tile_pad), (0, 0)),
-                mode="constant",
-                constant_values=0,
-            )
+        tile_u8 = _pad_rgb_for_inference(tile_u8, tile_pad)
 
         tile_pil = Image.fromarray(tile_u8, mode="RGB")
         sky = _infer_mask(tile_pil, cfg["sky_prompt"], cfg["sky_threshold"])
-        glare = _infer_mask(tile_pil, cfg["glare_prompt"], cfg["glare_threshold"])
-        glare = _dilate_mask(glare, cfg["glare_dilation"])
+        sky = _crop_inference_pad(sky, tile_pad)
 
-        if tile_pad > 0:
-            sky = sky[tile_pad:-tile_pad, tile_pad:-tile_pad]
-            glare = glare[tile_pad:-tile_pad, tile_pad:-tile_pad]
-
-        tile_mask = np.maximum(sky, glare)
         stitched[y1:y2, x1:x2] = np.maximum(
-            stitched[y1:y2, x1:x2], tile_mask[: y2 - y1, : x2 - x1]
+            stitched[y1:y2, x1:x2], sky[: y2 - y1, : x2 - x1]
         )
 
     if pad_bottom > 0:
@@ -194,6 +209,7 @@ def _process_one(task):
     if pad_right > 0:
         stitched = stitched[:, :-pad_right]
 
+    stitched = np.maximum(stitched, glare[: stitched.shape[0], : stitched.shape[1]])
     stitched = np.maximum(stitched, flare[: stitched.shape[0], : stitched.shape[1]])
 
     stitched = np.clip(stitched * 255.0, 0, 255).astype(np.uint8)
@@ -249,7 +265,7 @@ def _process_one(task):
 @click.option("--sky-threshold", default=0.5, show_default=True, type=float)
 @click.option("--glare-prompt", default="glare", show_default=True)
 @click.option("--glare-threshold", default=0.3, show_default=True, type=float)
-@click.option("--glare-dilation", default=3, show_default=True, type=int)
+@click.option("--glare-dilation", default=5, show_default=True, type=int)
 @click.option("--mask-threshold", default=0.5, show_default=True, type=float)
 @click.option("--square-output/--no-square-output", default=True, show_default=True)
 def main(
@@ -345,7 +361,7 @@ def main(
     )
     click.echo(cuda_summary)
     click.echo(
-        f"max_resize={resize_width}x{resize_height} downscale_only_if_bigger=true tiles={tile_rows}x{tile_cols} overlap=({overlap_x},{overlap_y}) tile_pad={tile_pad} sky='{sky_prompt}'({sky_threshold}) glare='{glare_prompt}'({glare_threshold}) flare='{DEFAULT_FLARE_PROMPT}'({DEFAULT_FLARE_THRESHOLD}) glare_dilation={max(0, int(glare_dilation))}"
+        f"max_resize={resize_width}x{resize_height} downscale_only_if_bigger=true sky_tiles={tile_rows}x{tile_cols} full_frame_prompts=glare,flare overlap=({overlap_x},{overlap_y}) tile_pad={tile_pad} sky='{sky_prompt}'({sky_threshold}) glare='{glare_prompt}'({glare_threshold}) flare='{DEFAULT_FLARE_PROMPT}'({DEFAULT_FLARE_THRESHOLD}) glare_dilation={max(0, int(glare_dilation))}"
     )
 
     results, failures = [], []

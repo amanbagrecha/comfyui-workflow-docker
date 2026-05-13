@@ -206,10 +206,10 @@
   },
   "28": {
     "inputs": {
-      "fov_deg_h": 140,
-      "fov_deg_v": 140,
+      "fov_deg_h": 150,
+      "fov_deg_v": 150,
       "h_deg": 180,
-      "v_deg": 290,
+      "v_deg": 280,
       "out_h": 1024,
       "out_w": 1024,
       "in_rot_deg": 0,
@@ -435,10 +435,10 @@
   },
   "45": {
     "inputs": {
-      "fov_w": 140,
-      "fov_h": 140,
+      "fov_w": 150,
+      "fov_h": 150,
       "u_deg": 180,
-      "v_deg": -70,
+      "v_deg": -80,
       "feather": 9,
       "perspective": [
         "36",

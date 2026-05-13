@@ -386,7 +386,7 @@
   },
   "39": {
     "inputs": {
-      "prompt": "remove the masked car and its shadow at the center (colored #000000) and fill with surface that matches the surrounding. Preserve everything outside it exactly. color and texture should match adjacent area. keep rest of the features intact.",
+      "prompt": "remove the masked car and its shadow at the center (colored here in #000000) and fill with surface that matches the surrounding surface. Preserve everything outside it exactly. color and texture should match adjacent area. keep rest of the features intact.",
       "clip": [
         "26",
         0

@@ -128,12 +128,31 @@ _PROCESSOR = None
 _CFG = None
 
 
-def _worker_init(cfg):
+def _worker_init(cfg, worker_counter=None, worker_lock=None, worker_barrier=None):
     global _MODEL, _PROCESSOR, _CFG
     _CFG = cfg
-    _PROCESSOR = Sam3Processor.from_pretrained(cfg["model_path"])
-    _MODEL = Sam3Model.from_pretrained(cfg["model_path"]).to(cfg["device"])
+    worker_idx = 0
+    if worker_counter is not None and worker_lock is not None:
+        with worker_lock:
+            worker_idx = worker_counter.value
+            worker_counter.value += 1
+
+    delay_sec = float(cfg.get("worker_load_stagger_sec", 0.0)) * worker_idx
+    if delay_sec > 0:
+        time.sleep(delay_sec)
+
+    if worker_lock is None:
+        _PROCESSOR = Sam3Processor.from_pretrained(cfg["model_path"])
+        _MODEL = Sam3Model.from_pretrained(cfg["model_path"]).to(cfg["device"])
+    else:
+        with worker_lock:
+            _PROCESSOR = Sam3Processor.from_pretrained(cfg["model_path"])
+            _MODEL = Sam3Model.from_pretrained(cfg["model_path"]).to(cfg["device"])
     _MODEL.eval()
+    if worker_barrier is not None:
+        worker_barrier.wait(
+            timeout=float(cfg.get("worker_init_barrier_timeout_sec", 300.0))
+        )
 
 
 def _infer_mask(tile_pil, prompt, threshold):
@@ -258,7 +277,7 @@ def _process_one(task):
 @click.option("--pattern", default="*.jpg", show_default=True)
 @click.option("--recursive/--no-recursive", default=True, show_default=True)
 @click.option("--skip-existing/--no-skip-existing", default=True, show_default=True)
-@click.option("-j", "--workers", default=1, show_default=True, type=int)
+@click.option("-j", "--workers", default=2, show_default=True, type=int)
 @click.option(
     "--model-path",
     default=DEFAULT_MODEL_PATH,
@@ -379,6 +398,8 @@ def main(
         glare_dilation=max(0, int(glare_dilation)),
         mask_threshold=mask_threshold,
         square_output=square_output,
+        worker_load_stagger_sec=10.0,
+        worker_init_barrier_timeout_sec=300.0,
     )
 
     click.echo(
@@ -401,10 +422,13 @@ def main(
             )
     else:
         ctx = mp.get_context("spawn")
+        worker_counter = ctx.Value("i", 0)
+        worker_lock = ctx.Lock()
+        worker_barrier = ctx.Barrier(workers)
         with ProcessPoolExecutor(
             max_workers=workers,
             initializer=_worker_init,
-            initargs=(cfg,),
+            initargs=(cfg, worker_counter, worker_lock, worker_barrier),
             mp_context=ctx,
         ) as ex:
             futs = {ex.submit(_process_one, task): task for task in tasks}

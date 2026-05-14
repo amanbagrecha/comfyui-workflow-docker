@@ -41,6 +41,8 @@ PRIVACY_WORKERS="${PRIVACY_WORKERS:-4}"
 SAM3_WORKERS="${SAM3_WORKERS:-3}"
 SAM3_RESIZE_WIDTH="${SAM3_RESIZE_WIDTH:-4000}"
 SAM3_RESIZE_HEIGHT="${SAM3_RESIZE_HEIGHT:-2000}"
+SAM3_GLARE_RESIZE_WIDTH="${SAM3_GLARE_RESIZE_WIDTH:-2000}"
+SAM3_GLARE_RESIZE_HEIGHT="${SAM3_GLARE_RESIZE_HEIGHT:-1000}"
 SAM3_GLARE_THRESHOLD="${SAM3_GLARE_THRESHOLD:-0.4}"
 SAM3_GLARE_DILATION="${SAM3_GLARE_DILATION:-5}"
 SAM3_TILE_ROWS="${SAM3_TILE_ROWS:-1}"
@@ -460,6 +462,8 @@ RUN_START_ARGS=(
   --param sam3_workers="$SAM3_WORKERS"
   --param sam3_resize_width="$SAM3_RESIZE_WIDTH"
   --param sam3_resize_height="$SAM3_RESIZE_HEIGHT"
+  --param sam3_glare_resize_width="$SAM3_GLARE_RESIZE_WIDTH"
+  --param sam3_glare_resize_height="$SAM3_GLARE_RESIZE_HEIGHT"
   --param sam3_glare_threshold="$SAM3_GLARE_THRESHOLD"
   --param sam3_glare_dilation="$SAM3_GLARE_DILATION"
   --param sam3_tile_rows="$SAM3_TILE_ROWS"
@@ -564,15 +568,18 @@ SKIPPED_INVALID=$(echo "$HARDLINK_OUTPUT" | grep -oP 'skipped_invalid=\K\d+' || 
 finish_stage hardlink_stage "$HARDLINK_SEC" --metric skipped_invalid="$SKIPPED_INVALID"
 
 S_SAM3=$(date +%s)
-SAM3_CMD=$(quote_cmd "$PYTHON_BIN" "$REPO/inpainting-workflow-master/$SAM3_SCRIPT" --input-dir "$DST" --output-dir "$OUT_MASK" --pattern '*' --model-path "$MODELS_COMFYUI_DIR/sam3" --glare-threshold "$SAM3_GLARE_THRESHOLD" --glare-dilation "$SAM3_GLARE_DILATION" --tile-rows "$SAM3_TILE_ROWS" --tile-cols "$SAM3_TILE_COLS" --resize-width "$SAM3_RESIZE_WIDTH" --resize-height "$SAM3_RESIZE_HEIGHT" --workers "$SAM3_WORKERS")
+SAM3_CMD=$(quote_cmd "$PYTHON_BIN" "$REPO/inpainting-workflow-master/$SAM3_SCRIPT" --input-dir "$DST" --output-dir "$OUT_MASK" --pattern '*' --model-path "$MODELS_COMFYUI_DIR/sam3" --sky-threshold 0.4 --glare-threshold "$SAM3_GLARE_THRESHOLD" --glare-dilation "$SAM3_GLARE_DILATION" --glare-resize-width "$SAM3_GLARE_RESIZE_WIDTH" --glare-resize-height "$SAM3_GLARE_RESIZE_HEIGHT" --tile-rows "$SAM3_TILE_ROWS" --tile-cols "$SAM3_TILE_COLS" --resize-width "$SAM3_RESIZE_WIDTH" --resize-height "$SAM3_RESIZE_HEIGHT" --workers "$SAM3_WORKERS")
 start_stage sam3_mask "$SAM3_CMD"
 "$PYTHON_BIN" "$REPO/inpainting-workflow-master/$SAM3_SCRIPT" \
   --input-dir "$DST" \
   --output-dir "$OUT_MASK" \
   --pattern "*" \
   --model-path "$MODELS_COMFYUI_DIR/sam3" \
+  --sky-threshold 0.4 \
   --glare-threshold "$SAM3_GLARE_THRESHOLD" \
   --glare-dilation "$SAM3_GLARE_DILATION" \
+  --glare-resize-width "$SAM3_GLARE_RESIZE_WIDTH" \
+  --glare-resize-height "$SAM3_GLARE_RESIZE_HEIGHT" \
   --tile-rows "$SAM3_TILE_ROWS" \
   --tile-cols "$SAM3_TILE_COLS" \
   --resize-width "$SAM3_RESIZE_WIDTH" \

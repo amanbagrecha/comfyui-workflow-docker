@@ -17,6 +17,7 @@ from transformers import Sam3Model, Sam3Processor
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp"}
 LANCZOS = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+BILINEAR = Image.Resampling.BILINEAR if hasattr(Image, "Resampling") else Image.BILINEAR
 
 DEFAULT_MODEL_PATH = str(Path(__file__).resolve().parents[1] / "models" / "comfyui" / "sam3")
 DEFAULT_FLARE_PROMPT = "optical flare"
@@ -40,6 +41,17 @@ def _crop_inference_pad(mask_np, pad):
     if pad == 0:
         return mask_np
     return mask_np[pad:-pad, pad:-pad]
+
+
+def _resize_mask_to(mask_np, width, height):
+    if mask_np.shape == (height, width):
+        return mask_np
+    return np.asarray(
+        Image.fromarray(mask_np.astype(np.float32), mode="F").resize(
+            (width, height), BILINEAR
+        ),
+        dtype=np.float32,
+    )
 
 
 def _pad_to_tile_grid(rgb_u8, rows, cols):
@@ -163,19 +175,26 @@ def _process_one(task):
         rgb_u8, cfg["resize_width"], cfg["resize_height"]
     )
     tile_pad = max(0, int(cfg["tile_pad"]))
-    full_frame_u8 = _pad_rgb_for_inference(rgb_u8, tile_pad)
+    full_h, full_w = rgb_u8.shape[:2]
+    glare_frame_u8 = _downscale_if_needed(
+        rgb_u8, cfg["glare_resize_width"], cfg["glare_resize_height"]
+    )
+    glare_frame_u8 = _pad_rgb_for_inference(glare_frame_u8, tile_pad)
 
     flare = _crop_inference_pad(_infer_mask(
-        Image.fromarray(full_frame_u8, mode="RGB"),
+        Image.fromarray(glare_frame_u8, mode="RGB"),
         DEFAULT_FLARE_PROMPT,
         DEFAULT_FLARE_THRESHOLD,
     ), tile_pad)
     glare = _infer_mask(
-        Image.fromarray(full_frame_u8, mode="RGB"),
+        Image.fromarray(glare_frame_u8, mode="RGB"),
         cfg["glare_prompt"],
         cfg["glare_threshold"],
     )
-    glare = _crop_inference_pad(_dilate_mask(glare, cfg["glare_dilation"]), tile_pad)
+    glare = _crop_inference_pad(glare, tile_pad)
+    flare = _resize_mask_to(flare, full_w, full_h)
+    glare = _resize_mask_to(glare, full_w, full_h)
+    glare = _dilate_mask(glare, cfg["glare_dilation"])
 
     rgb_u8, pad_right, pad_bottom = _pad_to_tile_grid(
         rgb_u8, cfg["tile_rows"], cfg["tile_cols"]
@@ -255,6 +274,8 @@ def _process_one(task):
 )
 @click.option("--resize-width", default=2000, show_default=True, type=int)
 @click.option("--resize-height", default=1000, show_default=True, type=int)
+@click.option("--glare-resize-width", default=2000, show_default=True, type=int)
+@click.option("--glare-resize-height", default=1000, show_default=True, type=int)
 @click.option("--tile-rows", default=1, show_default=True, type=int)
 @click.option("--tile-cols", default=2, show_default=True, type=int)
 @click.option("--overlap", "overlap_ratio", default=0.0, show_default=True, type=float)
@@ -279,6 +300,8 @@ def main(
     device,
     resize_width,
     resize_height,
+    glare_resize_width,
+    glare_resize_height,
     tile_rows,
     tile_cols,
     overlap_ratio,
@@ -341,6 +364,8 @@ def main(
         device=device,
         resize_width=resize_width,
         resize_height=resize_height,
+        glare_resize_width=glare_resize_width,
+        glare_resize_height=glare_resize_height,
         tile_rows=tile_rows,
         tile_cols=tile_cols,
         overlap_ratio=overlap_ratio,
@@ -361,7 +386,7 @@ def main(
     )
     click.echo(cuda_summary)
     click.echo(
-        f"max_resize={resize_width}x{resize_height} downscale_only_if_bigger=true sky_tiles={tile_rows}x{tile_cols} full_frame_prompts=glare,flare overlap=({overlap_x},{overlap_y}) tile_pad={tile_pad} sky='{sky_prompt}'({sky_threshold}) glare='{glare_prompt}'({glare_threshold}) flare='{DEFAULT_FLARE_PROMPT}'({DEFAULT_FLARE_THRESHOLD}) glare_dilation={max(0, int(glare_dilation))}"
+        f"max_resize={resize_width}x{resize_height} downscale_only_if_bigger=true sky_tiles={tile_rows}x{tile_cols} glare_flare_resize={glare_resize_width}x{glare_resize_height} overlap=({overlap_x},{overlap_y}) tile_pad={tile_pad} sky='{sky_prompt}'({sky_threshold}) glare='{glare_prompt}'({glare_threshold}) flare='{DEFAULT_FLARE_PROMPT}'({DEFAULT_FLARE_THRESHOLD}) glare_dilation={max(0, int(glare_dilation))}"
     )
 
     results, failures = [], []

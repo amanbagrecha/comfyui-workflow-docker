@@ -46,6 +46,11 @@ All Python dependencies are declared in `pyproject.toml` and pinned in `uv.lock`
 - `run_full_pipeline.sh`
   - Runs one shard end to end on one GPU
 
+## Run Policy
+- Do not launch `run_full_pipeline.sh` directly for normal runs.
+- Always use `run_multi_gpu_pipeline.sh` as the top-level entry point, even for single-GPU runs.
+- `run_full_pipeline.sh` is an internal per-shard worker that should only be invoked by `run_multi_gpu_pipeline.sh`.
+
 ## S3 Parallel Downloader
 For fast parallel downloads from S3, use `inpainting-workflow-master/s3_parallel_download.py`:
 ```bash

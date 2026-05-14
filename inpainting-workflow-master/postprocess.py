@@ -547,14 +547,16 @@ def process_one(
         feather=top_feather,
     )
 
-    img = fix_panorama_seam(
-        img,
-        _LAMA,
-        seam_width_frac=seam_width_frac,
-        pad_frac=pad_frac,
-        feather_frac=seam_feather_frac,
-        mask_sigma=mask_sigma,
-    )
+    # Temporarily disable the rolled center-crop seam repair while keeping the
+    # sky-mask-based postprocess path above intact.
+    # img = fix_panorama_seam(
+    #     img,
+    #     _LAMA,
+    #     seam_width_frac=seam_width_frac,
+    #     pad_frac=pad_frac,
+    #     feather_frac=seam_feather_frac,
+    #     mask_sigma=mask_sigma,
+    # )
 
     write_rgb(Path(out_path), img, jpeg_quality=jpeg_quality)
     return out_path

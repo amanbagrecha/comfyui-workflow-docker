@@ -21,16 +21,20 @@ BILINEAR = Image.Resampling.BILINEAR if hasattr(Image, "Resampling") else Image.
 
 DEFAULT_MODEL_PATH = str(Path(__file__).resolve().parents[1] / "models" / "comfyui" / "sam3")
 DEFAULT_FLARE_PROMPT = "optical flare"
-DEFAULT_FLARE_THRESHOLD = 0.35
+DEFAULT_FLARE_THRESHOLD = 0.3
 
 
 def _pad_rgb_for_inference(rgb_u8, pad):
     pad = max(0, int(pad))
     if pad == 0:
         return rgb_u8
+
+    # Add wrap context across the panorama seam while keeping black context only
+    # above the image so top-edge sky detections are not clipped.
+    padded = np.pad(rgb_u8, ((0, 0), (pad, pad), (0, 0)), mode="wrap")
     return np.pad(
-        rgb_u8,
-        ((pad, pad), (pad, pad), (0, 0)),
+        padded,
+        ((pad, 0), (0, 0), (0, 0)),
         mode="constant",
         constant_values=0,
     )
@@ -40,7 +44,7 @@ def _crop_inference_pad(mask_np, pad):
     pad = max(0, int(pad))
     if pad == 0:
         return mask_np
-    return mask_np[pad:-pad, pad:-pad]
+    return mask_np[pad:, pad:-pad]
 
 
 def _resize_mask_to(mask_np, width, height):
@@ -184,7 +188,7 @@ def _process_one(task):
     flare = _crop_inference_pad(_infer_mask(
         Image.fromarray(glare_frame_u8, mode="RGB"),
         DEFAULT_FLARE_PROMPT,
-        DEFAULT_FLARE_THRESHOLD,
+        cfg["flare_threshold"],
     ), tile_pad)
     glare = _infer_mask(
         Image.fromarray(glare_frame_u8, mode="RGB"),
@@ -196,6 +200,7 @@ def _process_one(task):
     glare = _resize_mask_to(glare, full_w, full_h)
     glare = _dilate_mask(glare, cfg["glare_dilation"])
 
+    rgb_u8 = _pad_rgb_for_inference(rgb_u8, tile_pad)
     rgb_u8, pad_right, pad_bottom = _pad_to_tile_grid(
         rgb_u8, cfg["tile_rows"], cfg["tile_cols"]
     )
@@ -213,11 +218,9 @@ def _process_one(task):
     stitched = np.zeros((h, w), dtype=np.float32)
     for x1, y1, x2, y2 in windows:
         tile_u8 = rgb_u8[y1:y2, x1:x2]
-        tile_u8 = _pad_rgb_for_inference(tile_u8, tile_pad)
 
         tile_pil = Image.fromarray(tile_u8, mode="RGB")
         sky = _infer_mask(tile_pil, cfg["sky_prompt"], cfg["sky_threshold"])
-        sky = _crop_inference_pad(sky, tile_pad)
 
         stitched[y1:y2, x1:x2] = np.maximum(
             stitched[y1:y2, x1:x2], sky[: y2 - y1, : x2 - x1]
@@ -227,6 +230,8 @@ def _process_one(task):
         stitched = stitched[:-pad_bottom, :]
     if pad_right > 0:
         stitched = stitched[:, :-pad_right]
+
+    stitched = _crop_inference_pad(stitched, tile_pad)
 
     stitched = np.maximum(stitched, glare[: stitched.shape[0], : stitched.shape[1]])
     stitched = np.maximum(stitched, flare[: stitched.shape[0], : stitched.shape[1]])
@@ -272,8 +277,8 @@ def _process_one(task):
     show_default=True,
     type=click.Choice(["auto", "cuda", "cpu"]),
 )
-@click.option("--resize-width", default=2000, show_default=True, type=int)
-@click.option("--resize-height", default=1000, show_default=True, type=int)
+@click.option("--resize-width", default=4000, show_default=True, type=int)
+@click.option("--resize-height", default=2000, show_default=True, type=int)
 @click.option("--glare-resize-width", default=2000, show_default=True, type=int)
 @click.option("--glare-resize-height", default=1000, show_default=True, type=int)
 @click.option("--tile-rows", default=1, show_default=True, type=int)
@@ -281,11 +286,18 @@ def _process_one(task):
 @click.option("--overlap", "overlap_ratio", default=0.0, show_default=True, type=float)
 @click.option("--overlap-x", default=30, show_default=True, type=int)
 @click.option("--overlap-y", default=0, show_default=True, type=int)
-@click.option("--tile-pad", default=20, show_default=True, type=int)
+@click.option(
+    "--tile-pad",
+    default=20,
+    show_default=True,
+    type=int,
+    help="Horizontal wrap pad width and top black pad height used before SAM3 inference.",
+)
 @click.option("--sky-prompt", default="sky", show_default=True)
-@click.option("--sky-threshold", default=0.5, show_default=True, type=float)
+@click.option("--sky-threshold", default=0.4, show_default=True, type=float)
 @click.option("--glare-prompt", default="glare", show_default=True)
 @click.option("--glare-threshold", default=0.3, show_default=True, type=float)
+@click.option("--flare-threshold", default=DEFAULT_FLARE_THRESHOLD, show_default=True, type=float)
 @click.option("--glare-dilation", default=5, show_default=True, type=int)
 @click.option("--mask-threshold", default=0.5, show_default=True, type=float)
 @click.option("--square-output/--no-square-output", default=True, show_default=True)
@@ -312,6 +324,7 @@ def main(
     sky_threshold,
     glare_prompt,
     glare_threshold,
+    flare_threshold,
     glare_dilation,
     mask_threshold,
     square_output,
@@ -376,6 +389,7 @@ def main(
         sky_threshold=sky_threshold,
         glare_prompt=glare_prompt,
         glare_threshold=glare_threshold,
+        flare_threshold=flare_threshold,
         glare_dilation=max(0, int(glare_dilation)),
         mask_threshold=mask_threshold,
         square_output=square_output,
@@ -386,7 +400,7 @@ def main(
     )
     click.echo(cuda_summary)
     click.echo(
-        f"max_resize={resize_width}x{resize_height} downscale_only_if_bigger=true sky_tiles={tile_rows}x{tile_cols} glare_flare_resize={glare_resize_width}x{glare_resize_height} overlap=({overlap_x},{overlap_y}) tile_pad={tile_pad} sky='{sky_prompt}'({sky_threshold}) glare='{glare_prompt}'({glare_threshold}) flare='{DEFAULT_FLARE_PROMPT}'({DEFAULT_FLARE_THRESHOLD}) glare_dilation={max(0, int(glare_dilation))}"
+        f"max_resize={resize_width}x{resize_height} downscale_only_if_bigger=true sky_tiles={tile_rows}x{tile_cols} glare_flare_resize={glare_resize_width}x{glare_resize_height} overlap=({overlap_x},{overlap_y}) wrap_pad_x={tile_pad} top_black_pad={tile_pad} sky='{sky_prompt}'({sky_threshold}) glare='{glare_prompt}'({glare_threshold}) flare='{DEFAULT_FLARE_PROMPT}'({flare_threshold}) glare_dilation={max(0, int(glare_dilation))}"
     )
 
     results, failures = [], []

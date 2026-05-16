@@ -180,16 +180,19 @@ def _process_one(task):
     )
     tile_pad = max(0, int(cfg["tile_pad"]))
     full_h, full_w = rgb_u8.shape[:2]
-    glare_frame_u8 = _downscale_if_needed(
+    glare_frame_base_u8 = _downscale_if_needed(
         rgb_u8, cfg["glare_resize_width"], cfg["glare_resize_height"]
     )
-    glare_frame_u8 = _pad_rgb_for_inference(glare_frame_u8, tile_pad)
+    glare_frame_u8 = _pad_rgb_for_inference(glare_frame_base_u8, tile_pad)
 
-    flare = _crop_inference_pad(_infer_mask(
-        Image.fromarray(glare_frame_u8, mode="RGB"),
-        DEFAULT_FLARE_PROMPT,
-        cfg["flare_threshold"],
-    ), tile_pad)
+    flare = _crop_inference_pad(
+        _infer_mask(
+            Image.fromarray(glare_frame_u8, mode="RGB"),
+            DEFAULT_FLARE_PROMPT,
+            cfg["flare_threshold"],
+        ),
+        tile_pad,
+    )
     glare = _infer_mask(
         Image.fromarray(glare_frame_u8, mode="RGB"),
         cfg["glare_prompt"],
@@ -297,7 +300,9 @@ def _process_one(task):
 @click.option("--sky-threshold", default=0.4, show_default=True, type=float)
 @click.option("--glare-prompt", default="glare", show_default=True)
 @click.option("--glare-threshold", default=0.3, show_default=True, type=float)
-@click.option("--flare-threshold", default=DEFAULT_FLARE_THRESHOLD, show_default=True, type=float)
+@click.option(
+    "--flare-threshold", default=DEFAULT_FLARE_THRESHOLD, show_default=True, type=float
+)
 @click.option("--glare-dilation", default=5, show_default=True, type=int)
 @click.option("--mask-threshold", default=0.5, show_default=True, type=float)
 @click.option("--square-output/--no-square-output", default=True, show_default=True)

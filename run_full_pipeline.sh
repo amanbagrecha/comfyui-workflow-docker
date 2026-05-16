@@ -77,8 +77,8 @@ PRIVACY_BLUR_BACKEND="${PRIVACY_BLUR_BACKEND:-gpu}"
 PRIVACY_OUTPUT_MODE="${PRIVACY_OUTPUT_MODE:-blur_only}"
 
 COMFY_IMAGE_NODE_ID="${COMFY_IMAGE_NODE_ID:-91}"
+COMFY_REFERENCE_IMAGE_NODE_ID="${COMFY_REFERENCE_IMAGE_NODE_ID:-96}"
 COMFY_MASK_NODE_ID="${COMFY_MASK_NODE_ID:-34}"
-COMFY_SAM3_MASK_NODE_ID="${COMFY_SAM3_MASK_NODE_ID:-60}"
 SKY_REFERENCE_SOURCE="${SKY_REFERENCE_SOURCE:-$REPO/inpainting-workflow-master/reference_sky.png}"
 SKY_REFERENCE_FILENAME="${SKY_REFERENCE_FILENAME:-chrome_xWUjmfs7m4.png}"
 LAMA_MODEL="${LAMA_MODEL:-$MODELS_COMFYUI_DIR/lama/big-lama.pt}"
@@ -482,8 +482,8 @@ RUN_START_ARGS=(
   --param privacy_lp_model="$PRIVACY_LP_MODEL"
   --param privacy_output_mode="$PRIVACY_OUTPUT_MODE"
   --param comfy_image_node_id="$COMFY_IMAGE_NODE_ID"
+  --param comfy_reference_image_node_id="$COMFY_REFERENCE_IMAGE_NODE_ID"
   --param comfy_mask_node_id="$COMFY_MASK_NODE_ID"
-  --param comfy_sam3_mask_node_id="$COMFY_SAM3_MASK_NODE_ID"
   --path perspective_mask="$PERSPECTIVE_MASK"
   --path log_file="$LOG_FILE"
   --path events_file="$EVENTS_FILE"
@@ -611,18 +611,17 @@ else
   finish_stage wait_comfyui "$((E_WAIT - S_WAIT))"
 
   S_INP=$(date +%s)
-  INPAINT_CMD=$(quote_cmd "$PYTHON_BIN" "$REPO/inpainting-workflow-master/comfyui_run.py" --workflow-json "$WORKFLOW_JSON" --server "$COMFY_SERVER" --input-dir "$DST" --mask "$COMFY_INPUT_ROOT/perspective_mask.png" --sam3-mask-dir "$OUT_MASK" --output-dir "$OUT1" --image-node-id "$COMFY_IMAGE_NODE_ID" --mask-node-id "$COMFY_MASK_NODE_ID" --sam3-mask-node-id "$COMFY_SAM3_MASK_NODE_ID" --workers 1 --timeout-s 3600 --comfy-input-root "$COMFY_INPUT_ROOT" --comfy-output-root "$COMFY_OUTPUT_ROOT")
+  INPAINT_CMD=$(quote_cmd "$PYTHON_BIN" "$REPO/inpainting-workflow-master/comfyui_run.py" --workflow-json "$WORKFLOW_JSON" --server "$COMFY_SERVER" --input-dir "$DST" --mask "$COMFY_INPUT_ROOT/perspective_mask.png" --output-dir "$OUT1" --image-node-id "$COMFY_IMAGE_NODE_ID" --reference-image-node-id "$COMFY_REFERENCE_IMAGE_NODE_ID" --mask-node-id "$COMFY_MASK_NODE_ID" --workers 1 --timeout-s 3600 --comfy-input-root "$COMFY_INPUT_ROOT" --comfy-output-root "$COMFY_OUTPUT_ROOT")
   start_stage inpainting "$INPAINT_CMD"
   "$PYTHON_BIN" "$REPO/inpainting-workflow-master/comfyui_run.py" \
     --workflow-json "$WORKFLOW_JSON" \
     --server "$COMFY_SERVER" \
     --input-dir "$DST" \
     --mask "$COMFY_INPUT_ROOT/perspective_mask.png" \
-    --sam3-mask-dir "$OUT_MASK" \
     --output-dir "$OUT1" \
     --image-node-id "$COMFY_IMAGE_NODE_ID" \
+    --reference-image-node-id "$COMFY_REFERENCE_IMAGE_NODE_ID" \
     --mask-node-id "$COMFY_MASK_NODE_ID" \
-    --sam3-mask-node-id "$COMFY_SAM3_MASK_NODE_ID" \
     --workers 1 \
     --timeout-s 3600 \
     --comfy-input-root "$COMFY_INPUT_ROOT" \

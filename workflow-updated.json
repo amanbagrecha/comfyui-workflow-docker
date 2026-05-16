@@ -127,7 +127,7 @@
   },
   "20": {
     "inputs": {
-      "prompt": "Fill the masked sky and sun glare region (here in white) with a clear early morning sky around 6 AM, soft natural blue sky without clouds or a visible sun. Only edit the white masked region. Use image 2 as reference",
+      "prompt": "Fill the sky and sun glare region with a clear early morning sky around 6 AM, soft natural blue sky without clouds or a visible sun. edit only if sky present. Use image 2 as reference ",
       "clip": [
         "26",
         0
@@ -565,17 +565,6 @@
     "class_type": "Image Save",
     "_meta": {
       "title": "Image Save"
-    }
-  },
-  "60": {
-    "inputs": {
-      "image_path": "sam3_mask_placeholder.png",
-      "RGBA": "false",
-      "filename_text_extension": "true"
-    },
-    "class_type": "Image Load",
-    "_meta": {
-      "title": "Image Load SAM3 Mask"
     }
   },
   "91": {

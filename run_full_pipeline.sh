@@ -38,12 +38,16 @@ COMFY_STOP_MAX_USED_MB="${COMFY_STOP_MAX_USED_MB:-1024}"
 
 POSTPROCESS_WORKERS="${POSTPROCESS_WORKERS:-3}"
 PRIVACY_WORKERS="${PRIVACY_WORKERS:-4}"
-SAM3_WORKERS="${SAM3_WORKERS:-3}"
+SAM3_WORKERS="${SAM3_WORKERS:-2}"
 SAM3_RESIZE_WIDTH="${SAM3_RESIZE_WIDTH:-4000}"
 SAM3_RESIZE_HEIGHT="${SAM3_RESIZE_HEIGHT:-2000}"
-SAM3_GLARE_THRESHOLD="${SAM3_GLARE_THRESHOLD:-0.4}"
-SAM3_TILE_ROWS="${SAM3_TILE_ROWS:-2}"
-SAM3_TILE_COLS="${SAM3_TILE_COLS:-1}"
+SAM3_GLARE_RESIZE_WIDTH="${SAM3_GLARE_RESIZE_WIDTH:-2000}"
+SAM3_GLARE_RESIZE_HEIGHT="${SAM3_GLARE_RESIZE_HEIGHT:-1000}"
+SAM3_GLARE_THRESHOLD="${SAM3_GLARE_THRESHOLD:-0.3}"
+SAM3_FLARE_THRESHOLD="${SAM3_FLARE_THRESHOLD:-0.3}"
+SAM3_GLARE_DILATION="${SAM3_GLARE_DILATION:-5}"
+SAM3_TILE_ROWS="${SAM3_TILE_ROWS:-1}"
+SAM3_TILE_COLS="${SAM3_TILE_COLS:-2}"
 SAM3_SCRIPT="${SAM3_SCRIPT:-sam3_tiled_mask.py}"
 LAPLACIAN_DILATION="${LAPLACIAN_DILATION:-1}"
 LAPLACIAN_BLUR="${LAPLACIAN_BLUR:-10}"
@@ -73,8 +77,8 @@ PRIVACY_BLUR_BACKEND="${PRIVACY_BLUR_BACKEND:-gpu}"
 PRIVACY_OUTPUT_MODE="${PRIVACY_OUTPUT_MODE:-blur_only}"
 
 COMFY_IMAGE_NODE_ID="${COMFY_IMAGE_NODE_ID:-91}"
+COMFY_REFERENCE_IMAGE_NODE_ID="${COMFY_REFERENCE_IMAGE_NODE_ID:-96}"
 COMFY_MASK_NODE_ID="${COMFY_MASK_NODE_ID:-34}"
-COMFY_SAM3_MASK_NODE_ID="${COMFY_SAM3_MASK_NODE_ID:-60}"
 SKY_REFERENCE_SOURCE="${SKY_REFERENCE_SOURCE:-$REPO/inpainting-workflow-master/reference_sky.png}"
 SKY_REFERENCE_FILENAME="${SKY_REFERENCE_FILENAME:-chrome_xWUjmfs7m4.png}"
 LAMA_MODEL="${LAMA_MODEL:-$MODELS_COMFYUI_DIR/lama/big-lama.pt}"
@@ -459,7 +463,11 @@ RUN_START_ARGS=(
   --param sam3_workers="$SAM3_WORKERS"
   --param sam3_resize_width="$SAM3_RESIZE_WIDTH"
   --param sam3_resize_height="$SAM3_RESIZE_HEIGHT"
+  --param sam3_glare_resize_width="$SAM3_GLARE_RESIZE_WIDTH"
+  --param sam3_glare_resize_height="$SAM3_GLARE_RESIZE_HEIGHT"
   --param sam3_glare_threshold="$SAM3_GLARE_THRESHOLD"
+  --param sam3_flare_threshold="$SAM3_FLARE_THRESHOLD"
+  --param sam3_glare_dilation="$SAM3_GLARE_DILATION"
   --param sam3_tile_rows="$SAM3_TILE_ROWS"
   --param sam3_tile_cols="$SAM3_TILE_COLS"
   --param sam3_script="$SAM3_SCRIPT"
@@ -474,8 +482,8 @@ RUN_START_ARGS=(
   --param privacy_lp_model="$PRIVACY_LP_MODEL"
   --param privacy_output_mode="$PRIVACY_OUTPUT_MODE"
   --param comfy_image_node_id="$COMFY_IMAGE_NODE_ID"
+  --param comfy_reference_image_node_id="$COMFY_REFERENCE_IMAGE_NODE_ID"
   --param comfy_mask_node_id="$COMFY_MASK_NODE_ID"
-  --param comfy_sam3_mask_node_id="$COMFY_SAM3_MASK_NODE_ID"
   --path perspective_mask="$PERSPECTIVE_MASK"
   --path log_file="$LOG_FILE"
   --path events_file="$EVENTS_FILE"
@@ -562,14 +570,19 @@ SKIPPED_INVALID=$(echo "$HARDLINK_OUTPUT" | grep -oP 'skipped_invalid=\K\d+' || 
 finish_stage hardlink_stage "$HARDLINK_SEC" --metric skipped_invalid="$SKIPPED_INVALID"
 
 S_SAM3=$(date +%s)
-SAM3_CMD=$(quote_cmd "$PYTHON_BIN" "$REPO/inpainting-workflow-master/$SAM3_SCRIPT" --input-dir "$DST" --output-dir "$OUT_MASK" --pattern '*' --model-path "$MODELS_COMFYUI_DIR/sam3" --glare-threshold "$SAM3_GLARE_THRESHOLD" --tile-rows "$SAM3_TILE_ROWS" --tile-cols "$SAM3_TILE_COLS" --resize-width "$SAM3_RESIZE_WIDTH" --resize-height "$SAM3_RESIZE_HEIGHT" --workers "$SAM3_WORKERS")
+SAM3_CMD=$(quote_cmd "$PYTHON_BIN" "$REPO/inpainting-workflow-master/$SAM3_SCRIPT" --input-dir "$DST" --output-dir "$OUT_MASK" --pattern '*' --model-path "$MODELS_COMFYUI_DIR/sam3" --sky-threshold 0.4 --glare-threshold "$SAM3_GLARE_THRESHOLD" --flare-threshold "$SAM3_FLARE_THRESHOLD" --glare-dilation "$SAM3_GLARE_DILATION" --glare-resize-width "$SAM3_GLARE_RESIZE_WIDTH" --glare-resize-height "$SAM3_GLARE_RESIZE_HEIGHT" --tile-rows "$SAM3_TILE_ROWS" --tile-cols "$SAM3_TILE_COLS" --resize-width "$SAM3_RESIZE_WIDTH" --resize-height "$SAM3_RESIZE_HEIGHT" --workers "$SAM3_WORKERS")
 start_stage sam3_mask "$SAM3_CMD"
 "$PYTHON_BIN" "$REPO/inpainting-workflow-master/$SAM3_SCRIPT" \
   --input-dir "$DST" \
   --output-dir "$OUT_MASK" \
   --pattern "*" \
   --model-path "$MODELS_COMFYUI_DIR/sam3" \
+  --sky-threshold 0.4 \
   --glare-threshold "$SAM3_GLARE_THRESHOLD" \
+  --flare-threshold "$SAM3_FLARE_THRESHOLD" \
+  --glare-dilation "$SAM3_GLARE_DILATION" \
+  --glare-resize-width "$SAM3_GLARE_RESIZE_WIDTH" \
+  --glare-resize-height "$SAM3_GLARE_RESIZE_HEIGHT" \
   --tile-rows "$SAM3_TILE_ROWS" \
   --tile-cols "$SAM3_TILE_COLS" \
   --resize-width "$SAM3_RESIZE_WIDTH" \
@@ -598,18 +611,17 @@ else
   finish_stage wait_comfyui "$((E_WAIT - S_WAIT))"
 
   S_INP=$(date +%s)
-  INPAINT_CMD=$(quote_cmd "$PYTHON_BIN" "$REPO/inpainting-workflow-master/comfyui_run.py" --workflow-json "$WORKFLOW_JSON" --server "$COMFY_SERVER" --input-dir "$DST" --mask "$COMFY_INPUT_ROOT/perspective_mask.png" --sam3-mask-dir "$OUT_MASK" --output-dir "$OUT1" --image-node-id "$COMFY_IMAGE_NODE_ID" --mask-node-id "$COMFY_MASK_NODE_ID" --sam3-mask-node-id "$COMFY_SAM3_MASK_NODE_ID" --workers 1 --timeout-s 3600 --comfy-input-root "$COMFY_INPUT_ROOT" --comfy-output-root "$COMFY_OUTPUT_ROOT")
+  INPAINT_CMD=$(quote_cmd "$PYTHON_BIN" "$REPO/inpainting-workflow-master/comfyui_run.py" --workflow-json "$WORKFLOW_JSON" --server "$COMFY_SERVER" --input-dir "$DST" --mask "$COMFY_INPUT_ROOT/perspective_mask.png" --output-dir "$OUT1" --image-node-id "$COMFY_IMAGE_NODE_ID" --reference-image-node-id "$COMFY_REFERENCE_IMAGE_NODE_ID" --mask-node-id "$COMFY_MASK_NODE_ID" --workers 1 --timeout-s 3600 --comfy-input-root "$COMFY_INPUT_ROOT" --comfy-output-root "$COMFY_OUTPUT_ROOT")
   start_stage inpainting "$INPAINT_CMD"
   "$PYTHON_BIN" "$REPO/inpainting-workflow-master/comfyui_run.py" \
     --workflow-json "$WORKFLOW_JSON" \
     --server "$COMFY_SERVER" \
     --input-dir "$DST" \
     --mask "$COMFY_INPUT_ROOT/perspective_mask.png" \
-    --sam3-mask-dir "$OUT_MASK" \
     --output-dir "$OUT1" \
     --image-node-id "$COMFY_IMAGE_NODE_ID" \
+    --reference-image-node-id "$COMFY_REFERENCE_IMAGE_NODE_ID" \
     --mask-node-id "$COMFY_MASK_NODE_ID" \
-    --sam3-mask-node-id "$COMFY_SAM3_MASK_NODE_ID" \
     --workers 1 \
     --timeout-s 3600 \
     --comfy-input-root "$COMFY_INPUT_ROOT" \

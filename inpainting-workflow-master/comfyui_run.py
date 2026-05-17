@@ -68,6 +68,12 @@ def timer(func):
     help="Main image node (LoadImage or WAS Image Load)",
 )
 @click.option(
+    "--reference-image-node-id",
+    default="96",
+    show_default=True,
+    help="Optional reference image node to set to the same image as --image-node-id",
+)
+@click.option(
     "--mask-node-id",
     default="34",
     show_default=True,
@@ -107,6 +113,7 @@ def main(
     workers: int,
     overwrite: bool,
     image_node_id: str,
+    reference_image_node_id: str,
     mask_node_id: str,
     sam3_mask_dir: Optional[Path],
     sam3_mask_node_id: str,
@@ -173,6 +180,10 @@ def main(
             )
 
     _validate_node_type(image_node_id, IMAGE_NODE_TYPES, "image")
+    if reference_image_node_id:
+        _validate_node_type(
+            reference_image_node_id, IMAGE_NODE_TYPES, "reference-image"
+        )
     _validate_node_type(mask_node_id, MASK_NODE_TYPES, "mask")
     if sam3_mask_node_id:
         _validate_node_type(sam3_mask_node_id, MASK_NODE_TYPES, "sam3-mask")
@@ -238,6 +249,10 @@ def main(
     click.echo(
         f"main_image_node={image_node_id} class={prompt_template[image_node_id].get('class_type')}"
     )
+    if reference_image_node_id:
+        click.echo(
+            f"reference_image_node={reference_image_node_id} class={prompt_template[reference_image_node_id].get('class_type')}"
+        )
     click.echo(
         f"fixed_mask_node={mask_node_id} class={prompt_template[mask_node_id].get('class_type')} path={mask_path}"
     )
@@ -253,6 +268,10 @@ def main(
         prompt = json.loads(json.dumps(prompt_template))
 
         _set_image_path(prompt, image_node_id, img_path, "main image")
+        if reference_image_node_id:
+            _set_image_path(
+                prompt, reference_image_node_id, img_path, "reference image"
+            )
         _set_image_path(prompt, mask_node_id, mask_path, "fixed mask")
 
         if sam3_mask_dir and sam3_mask_node_id:

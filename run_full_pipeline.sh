@@ -75,6 +75,8 @@ PRIVACY_P360_DEVICE="${PRIVACY_P360_DEVICE:-auto}"
 PRIVACY_BLUR_SCOPE="${PRIVACY_BLUR_SCOPE:-roi}"
 PRIVACY_BLUR_BACKEND="${PRIVACY_BLUR_BACKEND:-gpu}"
 PRIVACY_OUTPUT_MODE="${PRIVACY_OUTPUT_MODE:-blur_only}"
+PRIVACY_OUTPUT_EXT="${PRIVACY_OUTPUT_EXT:-jpg}"
+PRIVACY_WEBP_QUALITY="${PRIVACY_WEBP_QUALITY:-90}"
 
 COMFY_IMAGE_NODE_ID="${COMFY_IMAGE_NODE_ID:-91}"
 COMFY_REFERENCE_IMAGE_NODE_ID="${COMFY_REFERENCE_IMAGE_NODE_ID:-96}"
@@ -481,6 +483,8 @@ RUN_START_ARGS=(
   --param privacy_face_model="$PRIVACY_FACE_MODEL"
   --param privacy_lp_model="$PRIVACY_LP_MODEL"
   --param privacy_output_mode="$PRIVACY_OUTPUT_MODE"
+  --param privacy_output_ext="$PRIVACY_OUTPUT_EXT"
+  --param privacy_webp_quality="$PRIVACY_WEBP_QUALITY"
   --param comfy_image_node_id="$COMFY_IMAGE_NODE_ID"
   --param comfy_reference_image_node_id="$COMFY_REFERENCE_IMAGE_NODE_ID"
   --param comfy_mask_node_id="$COMFY_MASK_NODE_ID"
@@ -694,6 +698,8 @@ else
         --blur-scope "$PRIVACY_BLUR_SCOPE"
         --blur-backend "$PRIVACY_BLUR_BACKEND"
         --output-mode "$PRIVACY_OUTPUT_MODE"
+        --output-ext "$PRIVACY_OUTPUT_EXT"
+        --webp-quality "$PRIVACY_WEBP_QUALITY"
         --workers "$PRIVACY_WORKERS"
       )
       if [ "$FORCE_REPROCESS" = "1" ]; then

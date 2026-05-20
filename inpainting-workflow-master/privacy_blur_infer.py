@@ -17,6 +17,7 @@ import torch
 import torch.nn.functional as F
 from open_image_models import LicensePlateDetector
 from open_image_models.detection.core.yolo_v9.inference import YoloV9ObjectDetector
+from PIL import Image
 from ultralytics import YOLO
 
 
@@ -233,9 +234,17 @@ def draw_label(
     )
 
 
-def write_jpg(path: Path, image_bgr: np.ndarray, quality: int) -> bool:
+def write_image(
+    path: Path, image_bgr: np.ndarray, jpg_quality: int, webp_quality: int
+) -> bool:
     path.parent.mkdir(parents=True, exist_ok=True)
-    return cv2.imwrite(str(path), image_bgr, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
+    if path.suffix.lower() == ".webp":
+        image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+        Image.fromarray(image_rgb).save(path, "WEBP", quality=int(webp_quality))
+        return True
+    return cv2.imwrite(
+        str(path), image_bgr, [cv2.IMWRITE_JPEG_QUALITY, int(jpg_quality)]
+    )
 
 
 def _process_chunk(packed: dict) -> tuple[list, list]:
@@ -275,11 +284,14 @@ def _process_chunk(packed: dict) -> tuple[list, list]:
 
     rows_summary: list = []
     rows_profile: list = []
+    output_ext = str(packed["output_ext"]).lower().lstrip(".")
+    if output_ext == "jpeg":
+        output_ext = "jpg"
 
     for image_path in image_paths:
         t0 = time.perf_counter()
-        blur_path = output_dir / f"{image_path.stem}.jpg"
-        annot_path = output_dir / f"{image_path.stem}_annot.jpg"
+        blur_path = output_dir / f"{image_path.stem}.{output_ext}"
+        annot_path = output_dir / f"{image_path.stem}_annot.{output_ext}"
         if (
             blur_path.exists()
             and (packed["output_mode"] == "blur_only" or annot_path.exists())
@@ -453,11 +465,21 @@ def _process_chunk(packed: dict) -> tuple[list, list]:
         gc.collect()
 
         t = time.perf_counter()
-        if not write_jpg(blur_path, out_blur, quality=packed["jpg_quality"]):
+        if not write_image(
+            blur_path,
+            out_blur,
+            jpg_quality=packed["jpg_quality"],
+            webp_quality=packed["webp_quality"],
+        ):
             print(f"failed write: {blur_path}", flush=True)
             continue
         if annotated_pano is not None:
-            if not write_jpg(annot_path, annotated_pano, quality=packed["jpg_quality"]):
+            if not write_image(
+                annot_path,
+                annotated_pano,
+                jpg_quality=packed["jpg_quality"],
+                webp_quality=packed["webp_quality"],
+            ):
                 print(f"failed write: {annot_path}", flush=True)
                 continue
         t_write = time.perf_counter() - t
@@ -547,6 +569,13 @@ def main() -> None:
 
     parser.add_argument("--min-contour-area", default=20.0, type=float)
     parser.add_argument("--jpg-quality", default=85, type=int)
+    parser.add_argument("--webp-quality", default=90, type=int)
+    parser.add_argument(
+        "--output-ext",
+        choices=["jpg", "jpeg", "webp"],
+        default="jpg",
+        help="Final privacy output image extension",
+    )
     parser.add_argument(
         "--output-mode",
         choices=["both", "blur_only"],
@@ -596,6 +625,8 @@ def main() -> None:
         roi_mask_threshold=args.roi_mask_threshold,
         min_contour_area=args.min_contour_area,
         jpg_quality=args.jpg_quality,
+        webp_quality=args.webp_quality,
+        output_ext=args.output_ext,
         output_mode=args.output_mode,
         overwrite=args.overwrite,
     )

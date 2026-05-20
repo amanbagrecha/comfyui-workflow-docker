@@ -209,6 +209,7 @@ bash orchestrate.sh <run_id_1> <run_id_2> ...
 | `S3_UPLOAD_PATH` | `s3://aipanoexport-batch2/panoramic_clean` | Upload destination |
 | `S3_LOGS_PATH` | `s3://aipanoexport-batch2/logs/<hostname>` | Remote log destination — `<hostname>` is the machine's hostname, which on Vast.ai is a container ID (e.g. `08703c04a697`). Always override with a meaningful name. |
 | `EVERY_NTH` | `3` | Download every Nth file |
+| `FORCE_REPROCESS` | `0` | `1` = rebuild local outputs and overwrite an existing object at the same S3 key |
 | `DRY_RUN` | `0` | `1` = print plan only, no execution |
 
 **Examples:**

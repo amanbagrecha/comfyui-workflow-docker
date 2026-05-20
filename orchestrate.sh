@@ -15,7 +15,9 @@
 #   AWS_DOWNLOAD_PROFILE  — Wasabi profile (default: wasabi)
 #   AWS_UPLOAD_PROFILE    — Upload profile (default: wasabi)
 #   WASABI_BUCKET         — Source bucket (default: pano-bkp)
+#   DOWNLOAD_PREFIX_BASE  — Optional source prefix prepended to each run ID
 #   EVERY_NTH             — Download every Nth file (default: 3)
+#   FORCE_REPROCESS       — Set to 1 to rebuild and overwrite an existing S3 object
 #   DRY_RUN               — Set to 1 to print plan without executing
 #
 # Per-run structured state is emitted to:
@@ -29,9 +31,11 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DOWNLOAD_PROFILE="${AWS_DOWNLOAD_PROFILE:-wasabi}"
 UPLOAD_PROFILE="${AWS_UPLOAD_PROFILE:-wasabi}"
 WASABI_BUCKET="${WASABI_BUCKET:-pano-bkp}"
+DOWNLOAD_PREFIX_BASE="${DOWNLOAD_PREFIX_BASE:-}"
 : "${S3_UPLOAD_PATH:?S3_UPLOAD_PATH is required (e.g. s3://my-bucket/my-batch)}"
 : "${S3_LOGS_PATH:?S3_LOGS_PATH is required (e.g. s3://my-bucket/my-batch/logs/host)}"
 EVERY_NTH="${EVERY_NTH:-3}"
+FORCE_REPROCESS="${FORCE_REPROCESS:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 DOWNLOAD_WORKERS="${DOWNLOAD_WORKERS:-16}"
 
@@ -183,6 +187,17 @@ prefix_to_name() {
   echo "${1%/}"
 }
 
+source_prefix_for_run() {
+  local run_name="${1%/}"
+  local base="${DOWNLOAD_PREFIX_BASE#/}"
+  base="${base%/}"
+  if [[ -n "$base" ]]; then
+    echo "$base/$run_name"
+  else
+    echo "$run_name"
+  fi
+}
+
 # ── Download one prefix from Wasabi ──────────────────────────────────────────
 download_prefix() {
   local prefix="$1"
@@ -240,13 +255,16 @@ tar_upload_cleanup() {
     rm -f "$manifest_file"
   fi
 
-  # 2. Upload (skipped if already on S3)
+  # 2. Upload (skipped if already on S3 unless FORCE_REPROCESS=1)
   stage_start "$run_name" upload
   local upload_skipped=0
-  if aws --profile "$UPLOAD_PROFILE" s3 ls "$s3dest" > /dev/null 2>&1; then
+  if [[ "$FORCE_REPROCESS" != "1" ]] && aws --profile "$UPLOAD_PROFILE" s3 ls "$s3dest" > /dev/null 2>&1; then
     upload_skipped=1
     log "[$run_name] Already on S3, skipping upload"
   else
+    if aws --profile "$UPLOAD_PROFILE" s3 ls "$s3dest" > /dev/null 2>&1; then
+      log "[$run_name] FORCE_REPROCESS=1, overwriting existing S3 object at $s3dest"
+    fi
     log "[$run_name] Uploading to $s3dest..."
     if ! aws --profile "$UPLOAD_PROFILE" s3 cp "$tar_file" "$s3dest" \
         2>&1 | tee -a "$ORCH_LOG"; then
@@ -329,6 +347,8 @@ fi
 log "Starting orchestration of ${#PREFIXES[@]} batches"
 log "Download profile: $DOWNLOAD_PROFILE | Upload profile: $UPLOAD_PROFILE"
 log "Wasabi bucket: $WASABI_BUCKET | Upload path: $S3_UPLOAD_PATH"
+[[ -n "$DOWNLOAD_PREFIX_BASE" ]] && log "Download prefix base: $DOWNLOAD_PREFIX_BASE"
+[[ "$FORCE_REPROCESS" == "1" ]] && log "FORCE_REPROCESS=1 — existing S3 objects will be rebuilt and overwritten"
 [[ "$DRY_RUN" == "1" ]] && log "DRY RUN — will print plan only"
 
 # Parallel tracking
@@ -338,6 +358,7 @@ declare -a RUN_PIDS=()
 for i in "${!PREFIXES[@]}"; do
   prefix="${PREFIXES[$i]}"
   run_name="$(prefix_to_name "$prefix")"
+  download_prefix="$(source_prefix_for_run "$run_name")"
   src_dir="$IMGS_DIR/$run_name"
   n=$((i + 1))
   total=${#PREFIXES[@]}
@@ -345,7 +366,7 @@ for i in "${!PREFIXES[@]}"; do
   cleanup_stale_local_runs "$run_name"
 
   if [[ "$DRY_RUN" == "1" ]]; then
-    log "DRY: download s3://$WASABI_BUCKET/$prefix -> $src_dir"
+    log "DRY: download s3://$WASABI_BUCKET/$download_prefix -> $src_dir"
     log "DRY: launch tmux run_${run_name}"
     log "DRY: tar_upload_cleanup $run_name"
     continue
@@ -353,27 +374,30 @@ for i in "${!PREFIXES[@]}"; do
 
   emit_event "$run_name" --event run_start --status running \
     --param prefix="$prefix" \
+    --param download_prefix="$download_prefix" \
     --param bucket="$WASABI_BUCKET" \
     --param s3_upload_path="$S3_UPLOAD_PATH" \
     --param every_nth="$EVERY_NTH" \
     --param position="$n/$total"
 
-  # ── Skip if already uploaded to S3 ────────────────────────────────────────
-  if aws --profile "$UPLOAD_PROFILE" s3 ls "$S3_UPLOAD_PATH/${run_name}.tar" > /dev/null 2>&1; then
+  # ── Skip if already uploaded to S3 unless FORCE_REPROCESS=1 ───────────────
+  if [[ "$FORCE_REPROCESS" != "1" ]] && aws --profile "$UPLOAD_PROFILE" s3 ls "$S3_UPLOAD_PATH/${run_name}.tar" > /dev/null 2>&1; then
     log "[$n/$total] SKIP $run_name — already on S3"
     cleanup_transient_run "$run_name"
     emit_event "$run_name" --event run_end --status success --reason already_on_s3
     continue
+  elif [[ "$FORCE_REPROCESS" == "1" ]] && aws --profile "$UPLOAD_PROFILE" s3 ls "$S3_UPLOAD_PATH/${run_name}.tar" > /dev/null 2>&1; then
+    log "[$n/$total] FORCE_REPROCESS=1 for $run_name — rebuilding and overwriting existing S3 object"
   fi
 
   # ── Download current batch ─────────────────────────────────────────────────
   dl_log="$LOGS_DIR/download_${run_name}.log"
   stage_start "$run_name" download
-  if ! download_prefix "$prefix" "$src_dir" "$dl_log"; then
+  if ! download_prefix "$download_prefix" "$src_dir" "$dl_log"; then
     stage_end "$run_name" download failure --error "s3_parallel_download.py failed"
     emit_event "$run_name" --event run_end --status failure \
       --error "download failed"
-    fail "Download failed: $prefix"
+    fail "Download failed: $download_prefix"
     sync_logs
     continue
   fi
@@ -389,7 +413,7 @@ for i in "${!PREFIXES[@]}"; do
       --metric input_count="$dl_count"
     emit_event "$run_name" --event run_end --status failure \
       --error "$validate_error"
-    fail "Download validation failed: $prefix"
+    fail "Download validation failed: $download_prefix"
     cleanup_transient_run "$run_name"
     sync_logs
     continue

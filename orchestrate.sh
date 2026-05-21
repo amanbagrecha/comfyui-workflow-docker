@@ -198,6 +198,18 @@ source_prefix_for_run() {
   fi
 }
 
+download_folder_for_prefix() {
+  local prefix="${1%/}"
+  local parent child
+  parent="${prefix%/*}"
+  child="${prefix##*/}"
+  if [[ "$parent" != "$prefix" ]]; then
+    echo "${parent##*/}_${child}"
+  else
+    echo "$child"
+  fi
+}
+
 # ── Download one prefix from Wasabi ──────────────────────────────────────────
 download_prefix() {
   local prefix="$1"
@@ -401,6 +413,14 @@ for i in "${!PREFIXES[@]}"; do
     sync_logs
     continue
   fi
+
+  downloaded_dir="$IMGS_DIR/$(download_folder_for_prefix "$download_prefix")"
+  if [[ "$downloaded_dir" != "$src_dir" && -d "$downloaded_dir" ]]; then
+    log "[$run_name] Normalizing downloaded folder: $downloaded_dir -> $src_dir"
+    rm -rf "$src_dir"
+    mv "$downloaded_dir" "$src_dir"
+  fi
+
   dl_count=$(ls "$src_dir" 2>/dev/null | wc -l)
   validate_output=$("$PYTHON_BIN" "$PIPELINE_HELPERS" assert-image-size \
     --path "$src_dir" 2>&1)

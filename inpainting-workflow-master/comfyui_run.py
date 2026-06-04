@@ -1,4 +1,6 @@
+import csv
 import json
+import random
 import time
 import uuid
 from pathlib import Path
@@ -90,6 +92,19 @@ def timer(func):
     default="",
     help="Per-image SAM3 mask node ID (LoadImage / LoadImageMask / WAS Image Load)",
 )
+@click.option(
+    "--sky-csv",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="CSV with image_id,has_sky columns from sky_classify.py. "
+         "Images absent from CSV default to has_sky=True.",
+)
+@click.option(
+    "--nosky-workflow-json",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Workflow JSON to use for images where has_sky=False.",
+)
 @click.option("--poll-s", default=1.0, show_default=True)
 @click.option("--timeout-s", default=1800, show_default=True)
 @click.option(
@@ -117,6 +132,8 @@ def main(
     mask_node_id: str,
     sam3_mask_dir: Optional[Path],
     sam3_mask_node_id: str,
+    sky_csv: Optional[Path],
+    nosky_workflow_json: Optional[Path],
     poll_s: float,
     timeout_s: int,
     comfy_input_root: Path,
@@ -154,7 +171,29 @@ def main(
         ) from exc
     output_path_value = output_subdir if output_subdir else "."
 
+    # Load sky classification map: filename -> has_sky bool
+    # Default True (safe fallback — never silently skip sky for unknown images)
+    sky_map: dict[str, bool] = {}
+    if sky_csv and sky_csv.exists():
+        with open(sky_csv, newline="") as f:
+            for row in csv.DictReader(f):
+                sky_map[row["image_id"]] = row["has_sky"].strip().lower() == "true"
+        has_count = sum(1 for v in sky_map.values() if v)
+        click.echo(
+            f"sky_csv={sky_csv} loaded: {len(sky_map)} images "
+            f"({has_count} sky, {len(sky_map)-has_count} no-sky)"
+        )
+
     # Read workflow JSON (either raw prompt dict OR wrapper with {"nodes": ...})
+    def _load_prompt_template(path: Path) -> dict:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        tmpl = raw["nodes"] if isinstance(raw, dict) and isinstance(raw.get("nodes"), dict) else raw
+        if not isinstance(tmpl, dict):
+            raise click.ClickException(
+                f"Workflow JSON must be a dict or contain a top-level 'nodes' dict: {path}"
+            )
+        return tmpl
+
     wf_raw = json.loads(workflow_json.read_text(encoding="utf-8"))
     prompt_template = (
         wf_raw["nodes"]
@@ -165,6 +204,11 @@ def main(
         raise click.ClickException(
             "Workflow JSON must be a dict or contain a top-level 'nodes' dict"
         )
+
+    nosky_prompt_template: Optional[dict] = None
+    if nosky_workflow_json:
+        nosky_prompt_template = _load_prompt_template(nosky_workflow_json)
+        click.echo(f"nosky_workflow={nosky_workflow_json}")
 
     def _validate_node_type(node_id: str, allowed_types: set[str], label: str):
         if node_id not in prompt_template:
@@ -188,16 +232,21 @@ def main(
     if sam3_mask_node_id:
         _validate_node_type(sam3_mask_node_id, MASK_NODE_TYPES, "sam3-mask")
 
-    save_node_ids = sorted(
-        [
-            node_id
-            for node_id, node in prompt_template.items()
-            if isinstance(node, dict) and node.get("class_type") == "Image Save"
-        ],
-        key=lambda node_id: int(node_id) if str(node_id).isdigit() else str(node_id),
-    )
-    if not save_node_ids:
-        raise click.ClickException("No 'Image Save' node found in workflow")
+    def _get_save_node_ids(tmpl: dict) -> list[str]:
+        ids = sorted(
+            [
+                node_id
+                for node_id, node in tmpl.items()
+                if isinstance(node, dict) and node.get("class_type") == "Image Save"
+            ],
+            key=lambda node_id: int(node_id) if str(node_id).isdigit() else str(node_id),
+        )
+        if not ids:
+            raise click.ClickException("No 'Image Save' node found in workflow")
+        return ids
+
+    save_node_ids = _get_save_node_ids(prompt_template)
+    nosky_save_node_ids = _get_save_node_ids(nosky_prompt_template) if nosky_prompt_template else []
 
     def _save_suffix(node_id: str, idx: int) -> str:
         if node_id in SAVE_NODE_SUFFIX_BY_ID:
@@ -264,8 +313,17 @@ def main(
     # Per-image worker
     @timer
     def _run_one(img_path: Path) -> str:
+        # Select workflow based on sky classification
+        has_sky = sky_map.get(img_path.name, True)
+        if not has_sky and nosky_prompt_template is not None:
+            active_template = nosky_prompt_template
+            active_save_ids = nosky_save_node_ids
+        else:
+            active_template = prompt_template
+            active_save_ids = save_node_ids
+
         # Clone the prompt dict (deep-ish copy) so threads don't fight
-        prompt = json.loads(json.dumps(prompt_template))
+        prompt = json.loads(json.dumps(active_template))
 
         _set_image_path(prompt, image_node_id, img_path, "main image")
         if reference_image_node_id:
@@ -284,7 +342,7 @@ def main(
             _set_image_path(prompt, sam3_mask_node_id, sam3_mask_path, "sam3 mask")
 
         expected_outputs = []
-        for idx, node_id in enumerate(save_node_ids):
+        for idx, node_id in enumerate(active_save_ids):
             save_inputs = prompt[node_id].setdefault("inputs", {})
             save_prefix = f"{img_path.stem}_{_save_suffix(node_id, idx)}"
             save_inputs["output_path"] = output_path_value

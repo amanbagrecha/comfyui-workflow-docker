@@ -20,7 +20,10 @@ RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)_g${GPU_ID}_$$}"
 PARENT_RUN_ID="${PARENT_RUN_ID:-}"
 
 COMFYUI_HOME="${COMFYUI_HOME:-$REPO/ComfyUI}"
-WORKFLOW_JSON="${WORKFLOW_JSON:-$REPO/workflow-updated.json}"
+WORKFLOW_JSON="${WORKFLOW_JSON:-$REPO/workflow-updated-v3.json}"
+NOSKY_WORKFLOW_JSON="${NOSKY_WORKFLOW_JSON:-$REPO/workflow-updated-v3-nosky.json}"
+CLIPSEG_MODEL_PATH="${CLIPSEG_MODEL_PATH:-$MODELS_COMFYUI_DIR/clipseg}"
+SKY_CLASSIFY_WORKERS="${SKY_CLASSIFY_WORKERS:-1}"
 MODELS_ROOT="${MODELS_ROOT:-$REPO/models}"
 MODELS_COMFYUI_DIR="${MODELS_COMFYUI_DIR:-$MODELS_ROOT/comfyui}"
 MODELS_PRIVACY_DIR="${MODELS_PRIVACY_DIR:-$MODELS_ROOT/privacy_blur}"
@@ -108,6 +111,7 @@ FAILED_EXIT_CODE=0
 
 HARDLINK_SEC=0
 SAM3_SEC=0
+SKY_CLASSIFY_SEC=0
 INPAINT_SEC=0
 POSTPROCESS_SEC=0
 EGOBLUR_SEC=0
@@ -115,9 +119,13 @@ COUNT_SEC=0
 
 COUNT_INPUT=0
 COUNT_SAM3_MASK=0
+COUNT_SKY_HAS=0
+COUNT_SKY_NO=0
 COUNT_INPAINT=0
 COUNT_POSTPROCESS=0
 COUNT_EGOBLUR=0
+
+OUT_SKY_CSV=""
 
 HOST_INPUT_DIR="$SRC"
 FINAL_BATCH_DIR=""
@@ -275,6 +283,9 @@ on_exit() {
     --elapsed-sec "$TOTAL_SEC"
     --metric stage_hardlink_sec="$HARDLINK_SEC"
     --metric stage_sam3_mask_sec="$SAM3_SEC"
+    --metric stage_sky_classify_sec="$SKY_CLASSIFY_SEC"
+    --metric count_sky_has="$COUNT_SKY_HAS"
+    --metric count_sky_no="$COUNT_SKY_NO"
     --metric stage_inpainting_sec="$INPAINT_SEC"
     --metric stage_postprocess_sec="$POSTPROCESS_SEC"
     --metric stage_egoblur_sec="$EGOBLUR_SEC"
@@ -407,8 +418,8 @@ validate_min_int COMFY_STOP_TIMEOUT "$COMFY_STOP_TIMEOUT" 1
 validate_min_int COMFY_STOP_POLL "$COMFY_STOP_POLL" 1
 validate_min_int COMFY_STOP_MAX_USED_MB "$COMFY_STOP_MAX_USED_MB" 0
 
-if [[ "$STOP_AFTER_STAGE" != "sam3" && "$STOP_AFTER_STAGE" != "inpainting" && "$STOP_AFTER_STAGE" != "postprocess" && "$STOP_AFTER_STAGE" != "egoblur" ]]; then
-  echo "ERROR: Invalid STOP_AFTER_STAGE=$STOP_AFTER_STAGE (expected: sam3|inpainting|postprocess|egoblur)"
+if [[ "$STOP_AFTER_STAGE" != "sam3" && "$STOP_AFTER_STAGE" != "sky_classify" && "$STOP_AFTER_STAGE" != "inpainting" && "$STOP_AFTER_STAGE" != "postprocess" && "$STOP_AFTER_STAGE" != "egoblur" ]]; then
+  echo "ERROR: Invalid STOP_AFTER_STAGE=$STOP_AFTER_STAGE (expected: sam3|sky_classify|inpainting|postprocess|egoblur)"
   exit 1
 fi
 
@@ -447,6 +458,7 @@ mkdir -p \
   "$COMFY_INPUT_ROOT" \
   "$COMFY_OUTPUT_ROOT" \
   "$COMFY_DATA_DIR/output-sam3-mask" \
+  "$COMFY_DATA_DIR/output-sky-classify" \
   "$COMFY_DATA_DIR/output-postprocessed" \
   "$COMFY_DATA_DIR/output-egoblur" \
   "$MODELS_COMFYUI_DIR" \
@@ -603,33 +615,75 @@ fi
 finish_stage sam3_mask "$SAM3_SEC" --metric output_count="$COUNT_SAM3_MASK"
 
 if [ "$STOP_AFTER_STAGE" = "sam3" ]; then
+  skip_stage sky_classify STOP_AFTER_STAGE=sam3
   skip_stage inpainting STOP_AFTER_STAGE=sam3
   skip_stage postprocess STOP_AFTER_STAGE=sam3
   skip_stage egoblur STOP_AFTER_STAGE=sam3
 else
-  S_WAIT=$(date +%s)
-  WAIT_CMD=$(quote_cmd ensure_comfyui_service)
-  start_stage wait_comfyui "$WAIT_CMD"
-  ensure_comfyui_service
-  E_WAIT=$(date +%s)
-  finish_stage wait_comfyui "$((E_WAIT - S_WAIT))"
+  OUT_SKY_CSV="$COMFY_DATA_DIR/output-sky-classify/$BATCH_NAME/sky_classify.csv"
+  mkdir -p "$(dirname "$OUT_SKY_CSV")"
 
-  S_INP=$(date +%s)
-  INPAINT_CMD=$(quote_cmd "$PYTHON_BIN" "$REPO/inpainting-workflow-master/comfyui_run.py" --workflow-json "$WORKFLOW_JSON" --server "$COMFY_SERVER" --input-dir "$DST" --mask "$COMFY_INPUT_ROOT/perspective_mask.png" --output-dir "$OUT1" --image-node-id "$COMFY_IMAGE_NODE_ID" --reference-image-node-id "$COMFY_REFERENCE_IMAGE_NODE_ID" --mask-node-id "$COMFY_MASK_NODE_ID" --workers 1 --timeout-s 3600 --comfy-input-root "$COMFY_INPUT_ROOT" --comfy-output-root "$COMFY_OUTPUT_ROOT")
-  start_stage inpainting "$INPAINT_CMD"
-  "$PYTHON_BIN" "$REPO/inpainting-workflow-master/comfyui_run.py" \
-    --workflow-json "$WORKFLOW_JSON" \
-    --server "$COMFY_SERVER" \
+  S_SKY=$(date +%s)
+  SKY_CMD=$(quote_cmd "$PYTHON_BIN" "$REPO/inpainting-workflow-master/sky_classify.py" \
     --input-dir "$DST" \
-    --mask "$COMFY_INPUT_ROOT/perspective_mask.png" \
-    --output-dir "$OUT1" \
-    --image-node-id "$COMFY_IMAGE_NODE_ID" \
-    --reference-image-node-id "$COMFY_REFERENCE_IMAGE_NODE_ID" \
-    --mask-node-id "$COMFY_MASK_NODE_ID" \
-    --workers 1 \
-    --timeout-s 3600 \
-    --comfy-input-root "$COMFY_INPUT_ROOT" \
-    --comfy-output-root "$COMFY_OUTPUT_ROOT"
+    --output-csv "$OUT_SKY_CSV" \
+    --model-path "$CLIPSEG_MODEL_PATH" \
+    --device cuda)
+  start_stage sky_classify "$SKY_CMD"
+  "$PYTHON_BIN" "$REPO/inpainting-workflow-master/sky_classify.py" \
+    --input-dir "$DST" \
+    --output-csv "$OUT_SKY_CSV" \
+    --model-path "$CLIPSEG_MODEL_PATH" \
+    --device cuda || {
+      echo "WARNING: sky_classify failed — all images will use full workflow"
+      OUT_SKY_CSV=""
+    }
+  E_SKY=$(date +%s)
+  SKY_CLASSIFY_SEC=$((E_SKY - S_SKY))
+
+  if [ -f "$OUT_SKY_CSV" ]; then
+    COUNT_SKY_HAS=$("$PYTHON_BIN" -c "
+import csv; rows=list(csv.DictReader(open('$OUT_SKY_CSV')))
+print(sum(1 for r in rows if r['has_sky'].strip().lower()=='true'))")
+    COUNT_SKY_NO=$("$PYTHON_BIN" -c "
+import csv; rows=list(csv.DictReader(open('$OUT_SKY_CSV')))
+print(sum(1 for r in rows if r['has_sky'].strip().lower()!='true'))")
+    echo "sky_classify: has_sky=$COUNT_SKY_HAS no_sky=$COUNT_SKY_NO"
+  fi
+  finish_stage sky_classify "$SKY_CLASSIFY_SEC" \
+    --metric count_sky_has="$COUNT_SKY_HAS" \
+    --metric count_sky_no="$COUNT_SKY_NO"
+
+  if [ "$STOP_AFTER_STAGE" = "sky_classify" ]; then
+    skip_stage inpainting STOP_AFTER_STAGE=sky_classify
+    skip_stage postprocess STOP_AFTER_STAGE=sky_classify
+    skip_stage egoblur STOP_AFTER_STAGE=sky_classify
+  else
+    S_WAIT=$(date +%s)
+    WAIT_CMD=$(quote_cmd ensure_comfyui_service)
+    start_stage wait_comfyui "$WAIT_CMD"
+    ensure_comfyui_service
+    E_WAIT=$(date +%s)
+    finish_stage wait_comfyui "$((E_WAIT - S_WAIT))"
+
+    S_INP=$(date +%s)
+    INPAINT_CMD=$(quote_cmd "$PYTHON_BIN" "$REPO/inpainting-workflow-master/comfyui_run.py" --workflow-json "$WORKFLOW_JSON" --server "$COMFY_SERVER" --input-dir "$DST" --mask "$COMFY_INPUT_ROOT/perspective_mask.png" --output-dir "$OUT1" --image-node-id "$COMFY_IMAGE_NODE_ID" --reference-image-node-id "$COMFY_REFERENCE_IMAGE_NODE_ID" --mask-node-id "$COMFY_MASK_NODE_ID" --workers 1 --timeout-s 3600 --comfy-input-root "$COMFY_INPUT_ROOT" --comfy-output-root "$COMFY_OUTPUT_ROOT")
+    start_stage inpainting "$INPAINT_CMD"
+    "$PYTHON_BIN" "$REPO/inpainting-workflow-master/comfyui_run.py" \
+      --workflow-json "$WORKFLOW_JSON" \
+      --server "$COMFY_SERVER" \
+      --input-dir "$DST" \
+      --mask "$COMFY_INPUT_ROOT/perspective_mask.png" \
+      --output-dir "$OUT1" \
+      --image-node-id "$COMFY_IMAGE_NODE_ID" \
+      --reference-image-node-id "$COMFY_REFERENCE_IMAGE_NODE_ID" \
+      --mask-node-id "$COMFY_MASK_NODE_ID" \
+      --workers 1 \
+      --timeout-s 3600 \
+      --comfy-input-root "$COMFY_INPUT_ROOT" \
+      --comfy-output-root "$COMFY_OUTPUT_ROOT" \
+      ${OUT_SKY_CSV:+--sky-csv "$OUT_SKY_CSV"} \
+      ${NOSKY_WORKFLOW_JSON:+--nosky-workflow-json "$NOSKY_WORKFLOW_JSON"}
   E_INP=$(date +%s)
   INPAINT_SEC=$((E_INP - S_INP))
 
@@ -639,6 +693,27 @@ else
     fail_stage inpainting "No inpainting outputs found in $OUT1; aborting downstream stages."
   fi
   finish_stage inpainting "$INPAINT_SEC" --metric output_count="$COUNT_INPAINT"
+
+  # For no-sky images, copy carremoved→newsky so postprocess always finds both files
+  if [ -f "$OUT_SKY_CSV" ]; then
+    "$PYTHON_BIN" - "$OUT_SKY_CSV" "$OUT1" << 'PYEOF'
+import sys, csv, shutil
+from pathlib import Path
+csv_path, out_dir = Path(sys.argv[1]), Path(sys.argv[2])
+for row in csv.DictReader(open(csv_path)):
+    if row["has_sky"].strip().lower() == "true":
+        continue
+    stem = Path(row["image_id"]).stem
+    for ext in (".jpg", ".jpeg", ".png"):
+        car = out_dir / f"{stem}_comfyui_carremoved{ext}"
+        if car.exists():
+            sky = out_dir / f"{stem}_comfyui_newsky{ext}"
+            if not sky.exists():
+                shutil.copy2(car, sky)
+                print(f"  fill_nosky: {sky.name}")
+            break
+PYEOF
+  fi
 
   S_STOP=$(date +%s)
   STOP_CMD=$(quote_cmd stop_comfyui_service)
@@ -718,7 +793,8 @@ else
       finish_stage egoblur "$EGOBLUR_SEC" --metric output_count="$COUNT_EGOBLUR"
     fi
   fi
-fi
+  fi  # closes sky_classify else
+fi    # closes sam3 else
 
 if [ -n "$FINAL_OUTPUT_DIR" ] && [ "$STOP_AFTER_STAGE" = "egoblur" ]; then
   FINAL_BATCH_DIR="$FINAL_OUTPUT_DIR/$BATCH_NAME"

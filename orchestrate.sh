@@ -181,6 +181,48 @@ stage_end() {
     --elapsed-sec "$elapsed" "$@"
 }
 
+declare -gA RUN_STARTED=()
+declare -gA RUN_TERMINAL=()
+
+mark_run_started() {
+  local run_name="$1"
+  RUN_STARTED["$run_name"]=1
+}
+
+emit_run_end() {
+  local run_name="$1"
+  shift
+  RUN_TERMINAL["$run_name"]=1
+  emit_event "$run_name" --event run_end "$@"
+}
+
+orchestrate_exit_trap() {
+  local rc=$?
+  local event_rc="$rc"
+  local run_name
+  trap - EXIT
+
+  if [[ "$event_rc" -eq 0 ]]; then
+    event_rc=1
+  fi
+
+  if [[ "$DRY_RUN" != "1" ]]; then
+    for run_name in "${!RUN_STARTED[@]}"; do
+      if [[ -z "${RUN_TERMINAL[$run_name]:-}" ]]; then
+        emit_run_end "$run_name" --status failure --exit-code "$event_rc" \
+          --error "orchestrate exited before terminal event"
+      fi
+    done
+    sync_logs
+  fi
+
+  exit "$rc"
+}
+
+trap orchestrate_exit_trap EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 # ── Derive folder name from prefix (prefix IS the run_id, e.g. 1021231_123123) ─
 prefix_to_name() {
   # Strip any trailing slash — the prefix is already the run_id
@@ -333,16 +375,16 @@ finalize_previous_run() {
     stage_end "$prev_name" pipeline success
     log "Run finished: $prev_name"
     if tar_upload_cleanup "$prev_name"; then
-      emit_event "$prev_name" --event run_end --status success
+      emit_run_end "$prev_name" --status success
     else
-      emit_event "$prev_name" --event run_end --status failure \
+      emit_run_end "$prev_name" --status failure \
         --error "tar_upload_cleanup failed"
       fail "tar/upload/cleanup failed: $prev_name"
     fi
   else
     local rc=$?
     stage_end "$prev_name" pipeline failure --exit-code "$rc"
-    emit_event "$prev_name" --event run_end --status failure --exit-code "$rc"
+    emit_run_end "$prev_name" --status failure --exit-code "$rc"
     fail "Pipeline failed: $prev_name (rc=$rc)"
     cleanup_output_dir "$prev_name"
   fi
@@ -384,6 +426,7 @@ for i in "${!PREFIXES[@]}"; do
     continue
   fi
 
+  mark_run_started "$run_name"
   emit_event "$run_name" --event run_start --status running \
     --param prefix="$prefix" \
     --param download_prefix="$download_prefix" \
@@ -396,7 +439,7 @@ for i in "${!PREFIXES[@]}"; do
   if [[ "$FORCE_REPROCESS" != "1" ]] && aws --profile "$UPLOAD_PROFILE" s3 ls "$S3_UPLOAD_PATH/${run_name}.tar" > /dev/null 2>&1; then
     log "[$n/$total] SKIP $run_name — already on S3"
     cleanup_transient_run "$run_name"
-    emit_event "$run_name" --event run_end --status success --reason already_on_s3
+    emit_run_end "$run_name" --status success --reason already_on_s3
     continue
   elif [[ "$FORCE_REPROCESS" == "1" ]] && aws --profile "$UPLOAD_PROFILE" s3 ls "$S3_UPLOAD_PATH/${run_name}.tar" > /dev/null 2>&1; then
     log "[$n/$total] FORCE_REPROCESS=1 for $run_name — rebuilding and overwriting existing S3 object"
@@ -407,7 +450,7 @@ for i in "${!PREFIXES[@]}"; do
   stage_start "$run_name" download
   if ! download_prefix "$download_prefix" "$src_dir" "$dl_log"; then
     stage_end "$run_name" download failure --error "s3_parallel_download.py failed"
-    emit_event "$run_name" --event run_end --status failure \
+    emit_run_end "$run_name" --status failure \
       --error "download failed"
     fail "Download failed: $download_prefix"
     sync_logs
@@ -431,7 +474,7 @@ for i in "${!PREFIXES[@]}"; do
     stage_end "$run_name" download failure \
       --error "$validate_error" \
       --metric input_count="$dl_count"
-    emit_event "$run_name" --event run_end --status failure \
+    emit_run_end "$run_name" --status failure \
       --error "$validate_error"
     fail "Download validation failed: $download_prefix"
     cleanup_transient_run "$run_name"
@@ -465,7 +508,7 @@ except Exception as e:
 " 2>>"$ORCH_LOG")
   if [ -z "$_mask_rel" ]; then
     stage_end "$run_name" pipeline failure --error "no_perspective_mask"
-    emit_event "$run_name" --event run_end --status failure \
+    emit_run_end "$run_name" --status failure \
       --error "run_id not in perspective_mask_index.json — no mask assigned, skipping"
     fail "[$run_name] No perspective mask found in index — skipping run"
     cleanup_transient_run "$run_name"

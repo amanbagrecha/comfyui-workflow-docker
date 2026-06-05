@@ -426,7 +426,10 @@ export SKIP_PREFLIGHT=1
 export RUN_ID="$child_run_id"
 export PARENT_RUN_ID="$RUN_NAME"
 export PERSPECTIVE_MASK="${PERSPECTIVE_MASK:-}"
-export WORKFLOW_JSON="${WORKFLOW_JSON:-$REPO/workflow-updated.json}"
+export WORKFLOW_JSON="${WORKFLOW_JSON:-$REPO/workflow-updated-v3.json}"
+export NOSKY_WORKFLOW_JSON="${NOSKY_WORKFLOW_JSON:-$REPO/workflow-updated-v3-nosky.json}"
+export CLIPSEG_MODEL_PATH="${CLIPSEG_MODEL_PATH:-${MODELS_COMFYUI_DIR:-${MODELS_ROOT:-$REPO/models}/comfyui}/clipseg}"
+export SKY_CLASSIFY_WORKERS="${SKY_CLASSIFY_WORKERS:-1}"
 
 "$RUN_FULL"
 rc=\$?

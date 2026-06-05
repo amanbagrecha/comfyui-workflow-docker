@@ -188,7 +188,38 @@ download_model \
     "$PRIVACY_MODELS_DIR/yolo-v9-s-608-license-plates-end2end.onnx" \
     "[8/8] Privacy blur LP detector (YOLOv9s-608 ONNX)"
 
-# 9. Checkpoints (if needed)
+# 9. CLIPSeg sky classifier (CIDAS/clipseg-rd64-refined) — ~570 MB
+#    Downloaded via huggingface_hub into HF cache format so from_pretrained works.
+CLIPSEG_CACHE_DIR="$COMFY_MODELS_DIR/clipseg"
+CLIPSEG_MARKER="$CLIPSEG_CACHE_DIR/models--CIDAS--clipseg-rd64-refined/refs/main"
+if [ -f "$CLIPSEG_MARKER" ]; then
+    echo "✓ Already exists: CLIPSeg (CIDAS/clipseg-rd64-refined) in $CLIPSEG_CACHE_DIR"
+    echo ""
+else
+    echo "↓ Downloading: [9/9] CLIPSeg sky classifier (CIDAS/clipseg-rd64-refined)"
+    echo "  Destination: $CLIPSEG_CACHE_DIR"
+    mkdir -p "$CLIPSEG_CACHE_DIR"
+    # Use uv-managed python if available (repo venv), else fall back to system python3
+    if command -v uv >/dev/null 2>&1 && [ -f "pyproject.toml" ]; then
+        PY="uv run python3"
+    else
+        PY="python3"
+    fi
+    $PY - "$CLIPSEG_CACHE_DIR" << 'PYEOF'
+import sys
+from huggingface_hub import snapshot_download
+cache_dir = sys.argv[1]
+try:
+    path = snapshot_download(repo_id="CIDAS/clipseg-rd64-refined", cache_dir=cache_dir)
+    print(f"✓ CLIPSeg downloaded to {path}")
+except Exception as e:
+    print(f"ERROR: CLIPSeg download failed: {e}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+    echo ""
+fi
+
+# 10. Checkpoints (if needed)
 # Uncomment if you have additional checkpoint models
 # download_model \
 #     "https://huggingface.co/your-repo/model.safetensors" \
@@ -214,7 +245,8 @@ echo "  │       ├── processor_config.json"
 echo "  │       ├── tokenizer.json + tokenizer_config.json"
 echo "  │       ├── vocab.json + merges.txt"
 echo "  │       └── special_tokens_map.json"
-echo "  │   └── lama/big-lama.pt"
+echo "  │   ├── lama/big-lama.pt"
+echo "  │   └── clipseg/models--CIDAS--clipseg-rd64-refined/ (HF cache)"
 echo "  ├── privacy_blur/"
 echo "  │   ├── face_yolov8n.pt"
 echo "  │   └── yolo-v9-s-608-license-plates-end2end.onnx"

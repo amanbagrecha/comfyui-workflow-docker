@@ -152,7 +152,7 @@ clone_or_checkout https://github.com/ltdrdata/ComfyUI-Manager "$COMFYUI_HOME/cus
 
 # Install Python dependencies before invoking cm-cli; ComfyUI-Manager's CLI
 # imports typer and other packages from the repo venv.
-uv sync --python "$PYTHON_BIN" --no-install-project
+UV_SYSTEM_CERTS=1 uv sync --python "$PYTHON_BIN" --no-install-project
 
 # Best-effort snapshot restore for ComfyUI-Manager state.
 # Pip installs are handled entirely by uv sync above, so we keep --no-deps

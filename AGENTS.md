@@ -101,6 +101,8 @@ Each per-GPU shard job performs the following stages:
 - `SAM3_WORKERS`
 - `POSTPROCESS_WORKERS`
 - `PRIVACY_WORKERS`
+- `PRIVACY_OUTPUT_EXT` — final privacy blur output extension; defaults to `webp` so production tars contain WebP images.
+- `PRIVACY_WEBP_QUALITY` — final WebP quality; defaults to `80`.
 - `STRICT_HARDLINK`
 - `AWS_UPLOAD_PROFILE`
 - `AWS_DOWNLOAD_PROFILE`
@@ -131,6 +133,7 @@ Then commit and push `perspective_mask_index.json`.
 - Postprocess output: `native_data/gpu<id>/output-postprocessed/<batch>`
 - Privacy blur output: `native_data/gpu<id>/output-egoblur/<batch>`
 - Optional merged final output: `FINAL_OUTPUT_DIR/<run-name>/gpu<id>`
+- Final tar contents come from merged privacy blur outputs and are WebP by default. Do not change ComfyUI `Image Save` workflow nodes for this final tar format switch.
 
 ## Logging Artifacts
 - Orchestrator logs: `logs/multigpu_<RUN_NAME>.log` and `logs/multigpu_<RUN_NAME>.events.jsonl`
@@ -149,7 +152,7 @@ aws --profile s3 s3 cp s3://aipanoexport-batch2/batch-10/<run_id>.manifest.json 
 # 2. Range-fetch just that file
 aws --profile s3 s3api get-object \
   --bucket aipanoexport-batch2 --key batch-10/<run_id>.tar \
-  --range "bytes=<tar_offset>-<tar_offset+size-1>" out.jpg
+  --range "bytes=<tar_offset>-<tar_offset+size-1>" out.webp
 ```
 
 **Backfill for already-uploaded tars** (run from controller, reads only headers — no full download):

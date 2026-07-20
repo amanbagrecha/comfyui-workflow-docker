@@ -1,0 +1,755 @@
+{
+  "8": {
+    "inputs": {
+      "conditioning": [
+        "20",
+        0
+      ],
+      "latent": [
+        "14",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "ReferenceLatent"
+    }
+  },
+  "9": {
+    "inputs": {
+      "samples": [
+        "17",
+        0
+      ],
+      "vae": [
+        "25",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "10": {
+    "inputs": {
+      "shift": 3,
+      "model": [
+        "27",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingAuraFlow",
+    "_meta": {
+      "title": "ModelSamplingAuraFlow"
+    }
+  },
+  "11": {
+    "inputs": {
+      "strength": 1,
+      "model": [
+        "10",
+        0
+      ]
+    },
+    "class_type": "CFGNorm",
+    "_meta": {
+      "title": "CFGNorm"
+    }
+  },
+  "12": {
+    "inputs": {
+      "image": [
+        "95",
+        0
+      ]
+    },
+    "class_type": "FluxKontextImageScale",
+    "_meta": {
+      "title": "FluxKontextImageScale"
+    }
+  },
+  "13": {
+    "inputs": {
+      "unet_name": "qwen_image_edit_2509_fp8_e4m3fn.safetensors",
+      "weight_dtype": "fp8_e4m3fn"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "14": {
+    "inputs": {
+      "pixels": [
+        "12",
+        0
+      ],
+      "vae": [
+        "25",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode"
+    }
+  },
+  "17": {
+    "inputs": {
+      "seed": 675879380146165,
+      "steps": 4,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "karras",
+      "denoise": 1,
+      "model": [
+        "11",
+        0
+      ],
+      "positive": [
+        "8",
+        0
+      ],
+      "negative": [
+        "30",
+        0
+      ],
+      "latent_image": [
+        "14",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "20": {
+    "inputs": {
+      "prompt": "Replace the sky with a clean even soft blue sky of uniform brightness from left to right. Remove the sun and glare areas so the whole sky is a single consistent blue without clouds.",
+      "clip": [
+        "26",
+        0
+      ],
+      "image1": [
+        "95",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "_meta": {
+      "title": "TextEncodeQwenImageEditPlus"
+    }
+  },
+  "23": {
+    "inputs": {
+      "target_width": 1024,
+      "target_height": 1024,
+      "padding_color": "black",
+      "interpolation": "area",
+      "image": [
+        "91",
+        0
+      ]
+    },
+    "class_type": "ResizeAndPadImage",
+    "_meta": {
+      "title": "ResizeAndPadImage"
+    }
+  },
+  "24": {
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1,
+      "color": 0
+    },
+    "class_type": "EmptyImage",
+    "_meta": {
+      "title": "EmptyImage"
+    }
+  },
+  "25": {
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "26": {
+    "inputs": {
+      "clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "27": {
+    "inputs": {
+      "lora_name": "Qwen-Image-Edit-2509-Lightning-4steps-V1.0-bf16.safetensors",
+      "strength_model": 1,
+      "model": [
+        "13",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "LoraLoaderModelOnly"
+    }
+  },
+  "28": {
+    "inputs": {
+      "fov_deg_h": 131,
+      "fov_deg_v": 131,
+      "h_deg": 0,
+      "v_deg": 277,
+      "out_h": 1024,
+      "out_w": 1024,
+      "in_rot_deg": 0,
+      "padding_mode": "bilinear",
+      "e_img": [
+        "91",
+        0
+      ]
+    },
+    "class_type": "Equirectangular to Perspective",
+    "_meta": {
+      "title": "Equirectangular to Perspective"
+    }
+  },
+  "29": {
+    "inputs": {
+      "samples": [
+        "37",
+        0
+      ],
+      "vae": [
+        "25",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "30": {
+    "inputs": {
+      "prompt": "ghost people, vehicle, zoom, offset, clouds, glare, sun, lens flare, bright left edge, bright right edge, bright panorama seam, overexposed edge glow, objects, antenna, pole, wire, cable, tower, bird, contrail, building, reflection, ghosting, extra glare streaks, duplicated structures, horizon changes, geometry distortion",
+      "clip": [
+        "26",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "_meta": {
+      "title": "TextEncodeQwenImageEditPlus"
+    }
+  },
+  "31": {
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1,
+      "color": 16711680
+    },
+    "class_type": "EmptyImage",
+    "_meta": {
+      "title": "EmptyImage"
+    }
+  },
+  "32": {
+    "inputs": {
+      "shift": 3,
+      "model": [
+        "27",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingAuraFlow",
+    "_meta": {
+      "title": "ModelSamplingAuraFlow"
+    }
+  },
+  "33": {
+    "inputs": {
+      "strength": 1,
+      "model": [
+        "32",
+        0
+      ]
+    },
+    "class_type": "CFGNorm",
+    "_meta": {
+      "title": "CFGNorm"
+    }
+  },
+  "34": {
+    "inputs": {
+      "image": "perspective_mask (1).png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "35": {
+    "inputs": {
+      "channel": "red",
+      "image": [
+        "100",
+        0
+      ]
+    },
+    "class_type": "ImageToMask",
+    "_meta": {
+      "title": "Convert Image to Mask"
+    }
+  },
+  "36": {
+    "inputs": {
+      "width": 1536,
+      "height": 1536,
+      "interpolation": "bicubic",
+      "method": "stretch",
+      "condition": "always",
+      "multiple_of": 0,
+      "image": [
+        "29",
+        0
+      ]
+    },
+    "class_type": "ImageResize+",
+    "_meta": {
+      "title": "ImageResize+"
+    }
+  },
+  "37": {
+    "inputs": {
+      "seed": 173027281591525,
+      "steps": 4,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "karras",
+      "denoise": 1,
+      "model": [
+        "33",
+        0
+      ],
+      "positive": [
+        "42",
+        0
+      ],
+      "negative": [
+        "30",
+        0
+      ],
+      "latent_image": [
+        "43",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "38": {
+    "inputs": {
+      "x": 0,
+      "y": 0,
+      "resize_source": false,
+      "destination": [
+        "28",
+        0
+      ],
+      "source": [
+        "24",
+        0
+      ],
+      "mask": [
+        "35",
+        0
+      ]
+    },
+    "class_type": "ImageCompositeMasked",
+    "_meta": {
+      "title": "ImageCompositeMasked"
+    }
+  },
+  "39": {
+    "inputs": {
+      "prompt": "remove the masked car-like black object and its shadow at the center and fill with surface that matches the surrounding surface. Preserve everything outside it exactly. color and texture should match adjacent area. keep rest of the features intact. ",
+      "clip": [
+        "26",
+        0
+      ],
+      "image1": [
+        "38",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImageEditPlus",
+    "_meta": {
+      "title": "TextEncodeQwenImageEditPlus"
+    }
+  },
+  "42": {
+    "inputs": {
+      "conditioning": [
+        "39",
+        0
+      ],
+      "latent": [
+        "43",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "ReferenceLatent"
+    }
+  },
+  "43": {
+    "inputs": {
+      "pixels": [
+        "38",
+        0
+      ],
+      "vae": [
+        "25",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE Encode"
+    }
+  },
+  "45": {
+    "inputs": {
+      "fov_w": 131,
+      "fov_h": 131,
+      "u_deg": 0,
+      "v_deg": -83,
+      "feather": 9,
+      "perspective": [
+        "36",
+        0
+      ],
+      "equi_base": [
+        "91",
+        0
+      ]
+    },
+    "class_type": "Perspective to Equirectangular",
+    "_meta": {
+      "title": "Perspective to Equirectangular + Blend"
+    }
+  },
+  "50": {
+    "inputs": {
+      "model_name": "RealESRGAN_x2plus.pth"
+    },
+    "class_type": "UpscaleModelLoader",
+    "_meta": {
+      "title": "Load Upscale Model"
+    }
+  },
+  "51": {
+    "inputs": {
+      "width": 1024,
+      "height": 488,
+      "x": 0,
+      "y": 268,
+      "image": [
+        "9",
+        0
+      ]
+    },
+    "class_type": "ImageCrop",
+    "_meta": {
+      "title": "Image Crop (remove black bars)"
+    }
+  },
+  "52": {
+    "inputs": {
+      "upscale_model": [
+        "50",
+        0
+      ],
+      "image": [
+        "107",
+        0
+      ]
+    },
+    "class_type": "ImageUpscaleWithModel",
+    "_meta": {
+      "title": "Upscale Image (using Model)"
+    }
+  },
+  "53": {
+    "inputs": {
+      "width": 8000,
+      "height": 4000,
+      "interpolation": "bilinear",
+      "method": "stretch",
+      "condition": "always",
+      "multiple_of": 0,
+      "image": [
+        "52",
+        0
+      ]
+    },
+    "class_type": "ImageResize+",
+    "_meta": {
+      "title": "\ud83d\udd27 Image Resize"
+    }
+  },
+  "54": {
+    "inputs": {
+      "output_path": "test-1",
+      "filename_prefix": "comfyui_newsky",
+      "filename_delimiter": "_",
+      "filename_number_padding": 4,
+      "filename_number_start": "false",
+      "extension": "jpg",
+      "dpi": 300,
+      "quality": 80,
+      "optimize_image": "true",
+      "lossless_webp": "false",
+      "overwrite_mode": "prefix_as_filename",
+      "show_history": "false",
+      "show_history_by_prefix": "false",
+      "embed_workflow": "true",
+      "show_previews": "true",
+      "images": [
+        "53",
+        0
+      ]
+    },
+    "class_type": "Image Save",
+    "_meta": {
+      "title": "Image Save"
+    }
+  },
+  "59": {
+    "inputs": {
+      "output_path": "test-2",
+      "filename_prefix": "comfyui_carremoved",
+      "filename_delimiter": "_",
+      "filename_number_padding": 4,
+      "filename_number_start": "false",
+      "extension": "jpg",
+      "dpi": 300,
+      "quality": 80,
+      "optimize_image": "true",
+      "lossless_webp": "false",
+      "overwrite_mode": "false",
+      "show_history": "false",
+      "show_history_by_prefix": "true",
+      "embed_workflow": "true",
+      "show_previews": "false",
+      "images": [
+        "45",
+        0
+      ]
+    },
+    "class_type": "Image Save",
+    "_meta": {
+      "title": "Image Save"
+    }
+  },
+  "91": {
+    "inputs": {
+      "image": "222730076065_555629906873_ladybug_panoramic_000411.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "95": {
+    "inputs": {
+      "target_width": 1024,
+      "target_height": 1024,
+      "padding_color": "black",
+      "interpolation": "area",
+      "image": [
+        "106",
+        0
+      ]
+    },
+    "class_type": "ResizeAndPadImage",
+    "_meta": {
+      "title": "ResizeAndPadImage"
+    }
+  },
+  "96": {
+    "inputs": {
+      "image": "222730076065_555629906873_ladybug_panoramic_000411.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "100": {
+    "inputs": {
+      "target_width": 1024,
+      "target_height": 1024,
+      "padding_color": "black",
+      "interpolation": "area",
+      "image": [
+        "34",
+        0
+      ]
+    },
+    "class_type": "ResizeAndPadImage",
+    "_meta": {
+      "title": "ResizeAndPadImage"
+    }
+  },
+  "101": {
+    "inputs": {
+      "width": 1024,
+      "height": 488,
+      "batch_size": 1,
+      "color": 0
+    },
+    "class_type": "EmptyImage",
+    "_meta": {
+      "title": "Wrap Pad Canvas (1024x488)"
+    }
+  },
+  "102": {
+    "inputs": {
+      "x": 952,
+      "y": 0,
+      "width": 24,
+      "height": 488,
+      "image": [
+        "108",
+        0
+      ]
+    },
+    "class_type": "ImageCrop",
+    "_meta": {
+      "title": "Crop Right Strip 24px (wrap)"
+    }
+  },
+  "103": {
+    "inputs": {
+      "x": 0,
+      "y": 0,
+      "resize_source": false,
+      "destination": [
+        "101",
+        0
+      ],
+      "source": [
+        "102",
+        0
+      ]
+    },
+    "class_type": "ImageCompositeMasked",
+    "_meta": {
+      "title": "Paste Right Strip at Left Edge"
+    }
+  },
+  "104": {
+    "inputs": {
+      "x": 24,
+      "y": 0,
+      "resize_source": false,
+      "destination": [
+        "103",
+        0
+      ],
+      "source": [
+        "108",
+        0
+      ]
+    },
+    "class_type": "ImageCompositeMasked",
+    "_meta": {
+      "title": "Paste Original in Centre"
+    }
+  },
+  "105": {
+    "inputs": {
+      "x": 0,
+      "y": 0,
+      "width": 24,
+      "height": 488,
+      "image": [
+        "108",
+        0
+      ]
+    },
+    "class_type": "ImageCrop",
+    "_meta": {
+      "title": "Crop Left Strip 24px (wrap)"
+    }
+  },
+  "106": {
+    "inputs": {
+      "x": 1000,
+      "y": 0,
+      "resize_source": false,
+      "destination": [
+        "104",
+        0
+      ],
+      "source": [
+        "105",
+        0
+      ]
+    },
+    "class_type": "ImageCompositeMasked",
+    "_meta": {
+      "title": "Paste Left Strip at Right Edge"
+    }
+  },
+  "107": {
+    "inputs": {
+      "x": 24,
+      "y": 0,
+      "width": 976,
+      "height": 488,
+      "image": [
+        "51",
+        0
+      ]
+    },
+    "class_type": "ImageCrop",
+    "_meta": {
+      "title": "Remove Wrap Padding from Sky Output"
+    }
+  },
+  "108": {
+    "inputs": {
+      "width": 976,
+      "height": 488,
+      "interpolation": "area",
+      "method": "stretch",
+      "condition": "always",
+      "multiple_of": 0,
+      "image": [
+        "45",
+        0
+      ]
+    },
+    "class_type": "ImageResize+",
+    "_meta": {
+      "title": "Pre-resize Equirect for Sky (976x488)"
+    }
+  }
+}

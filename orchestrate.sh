@@ -518,6 +518,18 @@ except Exception as e:
   _mask_abs="$REPO/$_mask_rel"
   log "[$run_name] Perspective mask: $_mask_abs"
 
+  # ── Resolve workflow JSON pair for this run ───────────────────────────────
+  # China-camera runs (run_id prefixed "@@") use a different equirect<->perspective
+  # projection (see workflow-v3-china.json vs workflow-updated-v3.json), so they
+  # need their own workflow JSON pair. All other run_ids keep the existing default.
+  if [[ "$run_name" == @@* ]]; then
+    _workflow_json="$REPO/workflow-v3-china.json"
+    _nosky_workflow_json="$REPO/workflow-v3-china-nosky.json"
+  else
+    _workflow_json="$REPO/workflow-updated-v3.json"
+    _nosky_workflow_json="$REPO/workflow-updated-v3-nosky.json"
+  fi
+
   stage_start "$run_name" pipeline
 
   tmux new-session -d -s "run_${run_name}" \
@@ -527,6 +539,8 @@ except Exception as e:
      SRC=${src_dir} \
      FINAL_OUTPUT_DIR=${OUTPUTS_DIR} \
      PERSPECTIVE_MASK=${_mask_abs} \
+     WORKFLOW_JSON=${_workflow_json} \
+     NOSKY_WORKFLOW_JSON=${_nosky_workflow_json} \
      bash ${PIPELINE} 2>&1 | tee ${run_log}; \
      echo \$? > ${rc_file}"
 
